@@ -113,24 +113,6 @@ jobs:
           tar --zstd -xf "$SDK"
           echo "SDK_DIR=$PWD/${SDK%.tar.zst}" >> "$GITHUB_ENV"
 
-      # Building the host Go toolchain (bootstrap + golang1.26) costs ~10
-      # minutes per run and does not depend on the sing-box version, so keep
-      # the host build tree between runs. Host packages live under hostpkg,
-      # and dl/ must be cached too: without the source tarballs the restore
-      # fails when make re-runs the prepare step. Bump the trailing suffix if
-      # the kmod selection below changes.
-      - name: Restore host toolchain cache
-        if: steps.resolve.outputs.skip != 'true' && steps.resolve.outputs.published == 'false'
-        uses: actions/cache@v4
-        with:
-          path: |
-            openwrt-sdk-*/dl
-            openwrt-sdk-*/staging_dir/host
-            openwrt-sdk-*/staging_dir/hostpkg
-            openwrt-sdk-*/build_dir/host
-            openwrt-sdk-*/build_dir/hostpkg
-          key: sdk-host-${{ env.OWRT_VERSION }}-${{ env.TARGET_NAME }}-v3
-
       - name: Build sing-box-tiny apk
         if: steps.resolve.outputs.skip != 'true' && steps.resolve.outputs.published == 'false'
         env:
