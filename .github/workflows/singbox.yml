@@ -216,7 +216,7 @@ jobs:
 
           # The file list has to be written before the conffiles metadata,
           # matching what OpenWrt's package-pack.mk does.
-          ( cd "$root" && find . -type f,l | sed 's|^\.|/|' | sort ) > "$work/sing-box-tiny.list"
+          ( cd "$root" && find . -type f,l | sed 's|^\./|/|' | sort ) > "$work/sing-box-tiny.list"
           mv "$work/sing-box-tiny.list" "$root/lib/apk/packages/sing-box-tiny.list"
           chmod 0644 "$root/lib/apk/packages/sing-box-tiny.list"
           cat "$root/lib/apk/packages/sing-box-tiny.list"
