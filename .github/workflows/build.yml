@@ -14,7 +14,7 @@ on:
       rootfs_mb:
         description: "Root filesystem size in MB (256 / 512 / 1024)"
         type: string
-        default: "512"
+        default: "256"
   push:
     branches: [main]
     paths:
