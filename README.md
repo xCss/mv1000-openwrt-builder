@@ -84,8 +84,9 @@ MV1000 是双核 A53 1GHz / 1GB RAM，代理吞吐大约 100–300 Mbps（协议
 1. 编辑 `/etc/sing-box/config.json`（OpenWrt 包的默认路径），按 sing-box 官方文档写 inbounds / outbounds / route。旁路由典型做法：`tun` 入站 + `auto_route`，或 `mixed` 入站配合防火墙重定向。
 2. `/etc/config/sing-box` 里 `option enabled '1'`；用 TUN 时把 `option user` 改成 `root`（默认 `sing-box` 用户没有创建 TUN 的权限）。
 3. `/etc/init.d/sing-box enable && /etc/init.d/sing-box start`，`logread -f | grep sing-box` 看启动日志。
-4. 需要网页面板时，在配置里开 `experimental.clash_api`：`external_controller` 设 `0.0.0.0:9090`（务必同时设 `secret`），`external_ui` 指向一个空目录（如 `/etc/sing-box/ui`）。目录为空时 sing-box 会按 `external_ui_download_url` 下载面板 ZIP，默认是 GitHub 上的 Yacd；国内拉不动就把 URL 换成镜像地址。面板只在目录为空时下载一次，不会自动更新。
-5. 改完配置用 `/etc/init.d/sing-box restart` 生效；升级订阅就是替换 config.json 再 restart。
+4. 网页面板：1.14 起推荐用新的 `services: [{ "type": "api", "listen": "0.0.0.0:9090", "secret": "<密钥>", "dashboard": true }]`（gRPC + gRPC-Web）。`dashboard` 默认从 `SagerNet/sing-box-dashboard` 的 gh-pages 下载，默认每 `1d` 更新，访问 `http://<IP>:9090/dashboard/`；文件默认落在工作目录下的 `dashboard/`，本包的 workdir 是 `/usr/share/sing-box`，所以是 `/usr/share/sing-box/dashboard`。
+5. 旧的 `experimental.clash_api` 仍可用，但 `external_ui` 的默认面板是 Yacd，且只在目录为空时下载一次、不自动更新；不想维护两套就只留 api 服务。
+6. 改完配置用 `/etc/init.d/sing-box restart` 生效；升级订阅就是替换 config.json 再 restart。
 
 > 路由器自身流量是否走代理由 route 规则决定；旁路由场景一般把 `br-lan` 的转发流量导入 tun，本机流量直连，避免回环。
 
