@@ -1,0 +1,42 @@
+name: Inspect apk (temp)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  dump:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install prerequisites
+        run: sudo apt-get update && sudo apt-get install -y zstd
+
+      - name: Download SDK
+        run: |
+          set -euo pipefail
+          SDK="openwrt-sdk-25.12.6-mvebu-cortexa53_gcc-14.3.0_musl.Linux-x86_64.tar.zst"
+          BASE="https://downloads.openwrt.org/releases/25.12.6/targets/mvebu/cortexa53"
+          curl -fsSL -o "$SDK" "$BASE/$SDK"
+          curl -fsSL -o sha256sums "$BASE/sha256sums"
+          grep -F "$SDK" sha256sums | sha256sum -c -
+          tar --zstd -xf "$SDK"
+
+      - name: Dump existing package
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p old
+          gh release download singbox-tiny-v1.14.4 \
+            --pattern 'sing-box-tiny-*.apk' --dir old --clobber
+          apk=$(ls openwrt-sdk-*/staging_dir/host/bin/apk)
+          fakeroot=$(ls openwrt-sdk-*/staging_dir/host/bin/fakeroot)
+          echo "apk: $apk"; "$apk" --version || true
+          echo "fakeroot: $fakeroot"
+          echo "=== adbdump ==="
+          "$apk" adbdump "old/"*.apk 2>&1 | head -120 || true
+          echo "=== info ==="
+          "$apk" info --all --allow-untrusted --no-network \
+            -X "$PWD/old" sing-box-tiny 2>&1 | head -40 || true
