@@ -29,7 +29,7 @@ MV1000 是双核 A53 1GHz / 1GB RAM，代理吞吐大约 100–300 Mbps（协议
 把本目录推到自己的 GitHub 仓库（公开/私有均可），默认分支 `main`。Actions 里运行 **Build MV1000 firmware**：
 
 - `plugin`：`nikki`（默认）/ `openclash` / `none`
-- `rootfs_mb`：默认 `256`。镜像会按这个大小生成 ext4 根分区，省去刷机后手动扩容。**如果 U-Boot 上传大文件失败，可改 192 甚至 160 重跑；只有在确实需要更多空间时才用 512/1024。**
+- `rootfs_mb`：默认 `256`。这个值直接决定 ext4 根分区和整包 raw 大小；U-Boot 网页上传实测 274MB 可以、530MB 会失败，所以别超过 320。剩余 eMMC 空间由首次启动脚本自动建成 `/mnt/data` 数据分区。
 
 产物：`openwrt-25.12.6-mvebu-cortexa53-glinet_gl-mv1000-mv1000-<plugin>-ext4-sdcard.img.gz`。打 tag 推送时会自动发 Release。
 
@@ -38,8 +38,9 @@ MV1000 是双核 A53 1GHz / 1GB RAM，代理吞吐大约 100–300 Mbps（协议
 - 基于 `openwrt-imagebuilder-25.12.6-mvebu-cortexa53`，profile `glinet_gl-mv1000`（内核 6.12.112）。
 - 内置 `luci` + 中文语言包 + 包管理器；Nikki 及其内核 `mihomo-meta` 直接打进 rootfs。
 - `files/etc/uci-defaults/99-bypass-router` 首次启动写入：LAN 静态 `192.168.1.2`、网关/DNS 指向 `.4`、关闭 DHCP/DHCPv6/RA、删除 WAN、LAN 区开启 masquerade + MSS clamping、时区 `Asia/Shanghai`。
+- `files/etc/uci-defaults/99-data-partition` 首次启动检查 eMMC 尾部空闲空间（≥512MB 时），自动建 p3、格式化成 ext4（label `data`）、挂载到 `/mnt/data` 并写入 fstab；后续开机由 `block-mount` 自动挂载。首次启动会多花几十秒格式化。
 - 因为 Nikki 的 apk 未签名（其官方安装脚本也用 `--allow-untrusted`），构建时关闭了 Image Builder 的签名校验；官方包仍从 `downloads.openwrt.org` 走 HTTPS 拉取。
-- 用的是 **ext4** 系统镜像：根分区直接可写，没有 overlay，刷完不用再手动扩容；代价是没有 `firstboot` 恢复出厂，重装只能 U-Boot 重刷或提前导出配置。
+- 用的是 **ext4** 系统镜像：根分区直接可写，没有 overlay；根分区在构建时按 `rootfs_mb` 固定，运行时不做在线扩容（builder 用 `make_ext4fs` 生成的 ext4 不支持加组），eMMC 剩余空间由首启脚本建成 `/mnt/data`。代价是没有 `firstboot` 恢复出厂，重装只能 U-Boot 重刷或提前导出配置。
 - 选 `openclash` 时会预置 `mihomo` 内核到 `/etc/openclash/core/clash_meta`，避免首启时联网下载。
 
 ### 3.3 为什么不用源码全量编译
@@ -55,7 +56,7 @@ MV1000 是双核 A53 1GHz / 1GB RAM，代理吞吐大约 100–300 Mbps（协议
 3. 按住 Reset（↻）不放，插 USB 电源；等 Power 与 WAN 灯常亮后松开。
 4. 浏览器打开 `http://192.168.1.1`（不要 https），选 `.img` 上传。页面会卡住是正常的，等 3–10 分钟（256 MB 镜像约 5 分钟），设备自动重启。
 5. 电脑网卡改回自动获取，访问 `http://192.168.1.2`，SSH `root@192.168.1.2`（无密码，先 `passwd` 设密码）。
-6. 确认 `df -h /` 显示根分区约等于 `rootfs_mb`。
+6. 确认 `df -h /` 显示根分区约等于 `rootfs_mb`，`df -h /mnt/data` 显示 eMMC 剩余空间（约 6GB）。
 
 如果上传到固定大小就中断：说明该 U-Boot 对大文件有限制，用 `rootfs_mb=256` 重新出包再刷。
 

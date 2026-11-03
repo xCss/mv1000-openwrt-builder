@@ -1,0 +1,43 @@
+#!/bin/sh
+# mv1000-data-partition: create an ext4 data partition in the unused tail
+# of the eMMC on first boot. Only touches sectors after the last partition.
+
+DEV=/dev/mmcblk1
+THRESHOLD=1048576   # 512 MiB of free space required
+
+[ -b "$DEV" ] || exit 0
+command -v parted >/dev/null 2>&1 || exit 0
+
+out=$(parted -s "$DEV" unit s print 2>/dev/null) || exit 0
+
+disk_sectors=$(echo "$out" | awk '/^Disk \/dev\/mmcblk1:/ {gsub("s","",$3); print $3}')
+last_end=$(echo "$out" | awk '$1 ~ /^[0-9]+$/ {e=$3; gsub("s","",e); if (e+0 > m) m=e+0} END {print m}')
+
+[ -n "$disk_sectors" ] && [ -n "$last_end" ] || exit 0
+[ $((disk_sectors - last_end)) -ge $THRESHOLD ] || exit 0
+
+start=$(( (last_end + 1 + 2047) / 2048 * 2048 ))
+
+parted -s "$DEV" unit s mkpart primary ext4 "$start" 100% || exit 1
+sleep 1
+[ -b "${DEV}p3" ] || exit 1
+
+mkfs.ext4 -F -L data -m 1 "${DEV}p3" || exit 1
+mkdir -p /mnt/data
+
+uuid=$(block info "${DEV}p3" 2>/dev/null | sed -n 's/.*UUID="\([^"]*\)".*/\1/p')
+if [ -n "$uuid" ] && [ -f /etc/config/fstab ]; then
+	cfg=$(uci -q show fstab | sed -n "s/^fstab\.\([^.=]*\)\.target='\/mnt\/data'$/\1/p" | head -n1)
+	[ -n "$cfg" ] || cfg=$(uci add fstab mount)
+	uci set "fstab.$cfg.target='/mnt/data'"
+	uci set "fstab.$cfg.uuid='$uuid'"
+	uci set "fstab.$cfg.enabled='1'"
+	uci set "fstab.$cfg.options='rw,noatime'"
+	uci commit fstab
+	/etc/init.d/fstab enable
+	/sbin/block mount
+else
+	mount "${DEV}p3" /mnt/data
+fi
+
+exit 0

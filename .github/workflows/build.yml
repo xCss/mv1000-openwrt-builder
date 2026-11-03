@@ -72,13 +72,13 @@ jobs:
           # fetched over HTTPS from downloads.openwrt.org.
           sed -i 's/^CONFIG_SIGNATURE_CHECK=.*/# CONFIG_SIGNATURE_CHECK is not set/' .config
           mkdir -p packages
-          chmod +x "$GITHUB_WORKSPACE/files/etc/uci-defaults/99-bypass-router"
+          chmod +x "$GITHUB_WORKSPACE"/files/etc/uci-defaults/*
 
       - name: Fetch proxy plugin packages
         run: |
           set -euo pipefail
           mkdir -p "$IB_DIR/packages"
-          pkgs="luci luci-i18n-base-zh-cn luci-i18n-firewall-zh-cn luci-app-package-manager luci-i18n-package-manager-zh-cn curl ca-bundle"
+          pkgs="luci luci-i18n-base-zh-cn luci-i18n-firewall-zh-cn luci-app-package-manager luci-i18n-package-manager-zh-cn curl ca-bundle parted block-mount e2fsprogs"
 
           case "$PLUGIN" in
             nikki)
