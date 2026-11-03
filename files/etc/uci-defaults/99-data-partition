@@ -2,11 +2,37 @@
 # mv1000-data-partition: create an ext4 data partition in the unused tail
 # of the eMMC on first boot, then make sure it is mounted at /mnt/data.
 
-DEV=/dev/mmcblk1
 THRESHOLD=1048576   # 512 MiB of free space required
 
-[ -b "$DEV" ] || exit 0
 command -v parted >/dev/null 2>&1 || exit 0
+
+# The two SDHCI controllers probe asynchronously, so the eMMC is mmcblk0 on
+# some boots and mmcblk1 on others. Pick the disk that carries the running
+# root filesystem instead of hardcoding a name.
+find_dev() {
+	for d in /dev/mmcblk[0-9]; do
+		[ -b "$d" ] || continue
+		for p in "${d}"p*; do
+			[ -b "$p" ] || continue
+			if block info "$p" 2>/dev/null | grep -q 'MOUNT="/"'; then
+				echo "$d"
+				return 0
+			fi
+		done
+	done
+	# Fallback: the only non-removable mmc disk with a p2 partition.
+	for d in /dev/mmcblk[0-9]; do
+		[ -b "$d" ] || continue
+		[ "$(cat "/sys/class/block/${d##*/}/removable" 2>/dev/null)" = "0" ] || continue
+		[ -b "${d}p2" ] || continue
+		echo "$d"
+		return 0
+	done
+	return 1
+}
+
+DEV=$(find_dev) || exit 0
+[ -b "$DEV" ] || exit 0
 
 ensure_mount() {
 	mkdir -p /mnt/data
@@ -31,7 +57,7 @@ ensure_mount() {
 if [ ! -b "${DEV}p3" ]; then
 	out=$(parted -s "$DEV" unit s print 2>/dev/null) || exit 0
 
-	disk_sectors=$(echo "$out" | awk '/^Disk \/dev\/mmcblk1:/ {gsub("s","",$3); print $3}')
+	disk_sectors=$(echo "$out" | awk '/^Disk \/dev\// {gsub("s","",$3); print $3}')
 	last_end=$(echo "$out" | awk '$1 ~ /^[0-9]+$/ {e=$3; gsub("s","",e); if (e+0 > m) m=e+0} END {print m}')
 
 	[ -n "$disk_sectors" ] && [ -n "$last_end" ] || exit 0
