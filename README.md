@@ -1,6 +1,6 @@
-# GL-MV1000 旁路由（OpenWrt 25.12 + Nikki）构建与刷机
+# GL-MV1000 旁路由（OpenWrt 25.12 + sing-box）构建与刷机
 
-XDR5480 继续做拨号主路由，MV1000 只做旁路由代理。本仓库用 GitHub Actions + OpenWrt Image Builder 出包，把 LuCI 和代理插件直接打进镜像，刷完即可用。
+XDR5480 继续做拨号主路由，MV1000 只做旁路由代理。本仓库用 GitHub Actions + OpenWrt Image Builder 出包，把 LuCI、sing-box 和 Argon 主题直接打进镜像，刷完即可用。
 
 ## 1. 地址规划
 
@@ -16,9 +16,13 @@ XDR5480 继续做拨号主路由，MV1000 只做旁路由代理。本仓库用 G
 
 | 方案 | 版本 | 25.12 apk | 依赖 | 适用性 |
 | --- | --- | --- | --- | --- |
-| **Nikki** | v1.26.2（mihomo-meta 1.19.32 随包） | ✅ `aarch64_cortex-a53` | 全部在官方源：firewall4、curl、yq、ip-full、kmod-tun、kmod-dummy、kmod-nft-socket、kmod-nft-tproxy、kmod-inet-diag | **推荐**。包内含 mihomo 内核，不联网下载内核；内存占用小；原生 nftables，适配 fw4 |
+| **sing-box（tiny）** | v1.14.4（CI 用 SDK 自编译） | ✅ `aarch64_cortex-a53` | 官方源：kmod-tun、kmod-inet-diag、ca-bundle | **推荐**。tiny 变体固定带 `gvisor/quic/utls/clash_api`，apk 约 11MB（mihomo-meta 是 20.6MB）；官方 feed 只到 1.13.21，CI 里升到上游最新版，顺带换掉旧 Go 标准库。没有 LuCI 应用，靠 JSON 配置 + Clash API 面板 |
 | OpenClash | v0.48.002 | ✅ `luci-app-openclash-0.48.002.apk` | dnsmasq-full、bash、ruby、ruby-yaml、kmod-tun、unzip、ip-full | 功能最全但重；内核默认首次启动才从 GitHub 下载（国内常失败）；会替换 dnsmasq 为 dnsmasq-full |
 | PassWall | 26.10.29-1 | ✅ 提供 apk | 还需要 chinadns-ng、dns2socks、microsocks、tcping、lyaml、luci-compat 等，来自其自有 feed | 非 Clash 方案；出包要多挂一个 feed，折腾成本高 |
+
+主题固定打包 [luci-theme-argon](https://github.com/jerrykuku/luci-theme-argon) v3.1.2 的官方 apk（PIN 了 SHA256），其自带的 uci-defaults 会把 LuCI 默认主题切成 Argon。
+
+sing-box tiny 的缺口：**没有 `with_wireguard` / `with_dhcp` / `with_acme` / `with_tailscale`**。节点里有 WireGuard 出站就会报 `unknown outbound type`，需要时在 `net/sing-box/Makefile` 的 tiny 分支补 tag 后重建。
 
 MV1000 是双核 A53 1GHz / 1GB RAM，代理吞吐大约 100–300 Mbps（协议不同差异大），别指望跑满千兆；直连（走绕过规则）可以接近千兆。
 
@@ -28,7 +32,7 @@ MV1000 是双核 A53 1GHz / 1GB RAM，代理吞吐大约 100–300 Mbps（协议
 
 把本目录推到自己的 GitHub 仓库（公开/私有均可），默认分支 `main`。Actions 里运行 **Build MV1000 firmware**：
 
-- `plugin`：`nikki`（默认）/ `openclash` / `none`
+- `plugin`：`singbox`（默认）/ `openclash` / `none`
 - `rootfs_mb`：默认 `256`。这个值直接决定 ext4 根分区和整包 raw 大小；U-Boot 网页上传实测 274MB 可以、530MB 会失败，所以别超过 320。剩余 eMMC 空间由首次启动脚本自动建成 `/mnt/data` 数据分区。
 
 产物：`openwrt-25.12.6-mvebu-cortexa53-glinet_gl-mv1000-mv1000-<plugin>-ext4-sdcard.img.gz`。打 tag 推送时会自动发 Release。
@@ -36,16 +40,17 @@ MV1000 是双核 A53 1GHz / 1GB RAM，代理吞吐大约 100–300 Mbps（协议
 ### 3.2 镜像里做了什么
 
 - 基于 `openwrt-imagebuilder-25.12.6-mvebu-cortexa53`，profile `glinet_gl-mv1000`（内核 6.12.112）。
-- 内置 `luci` + 中文语言包 + 包管理器；Nikki 及其内核 `mihomo-meta` 直接打进 rootfs。
+- 内置 `luci` + 中文语言包 + 包管理器；`sing-box-tiny` 1.14.4 由 CI 下载 OpenWrt SDK 现场编译成 apk 再装进镜像。feed 里的版本是 1.13.21，CI 会改 `PKG_VERSION/PKG_HASH` 升到上游最新版；tiny 固定 tag 为 `with_gvisor,with_quic,with_utls,with_clash_api,badlinkname,tfogo_checklinkname0`。
+- 内置 `luci-theme-argon` 3.1.2（官方 release apk，构建时校验 SHA256）；包自带的 `/etc/uci-defaults/30_luci-theme-argon` 首次启动把默认主题设为 Argon。
 - `files/etc/uci-defaults/99-bypass-router` 首次启动写入：LAN 静态 `192.168.1.2`、网关/DNS 指向 `.4`、关闭 DHCP/DHCPv6/RA、删除 WAN、LAN 区开启 masquerade + MSS clamping、时区 `Asia/Shanghai`。
 - `files/etc/uci-defaults/99-data-partition` 首次启动检查 eMMC 尾部空闲空间（≥512MB 时），自动建 p3、格式化成 ext4（label `data`）、挂载到 `/mnt/data` 并写入 fstab；后续开机由 `block-mount` 自动挂载。首次启动会多花几十秒格式化。注意：`parted` 会重写 MBR 磁盘签名，而内核命令行的 `root=PARTUUID=...` 依赖它，脚本会在建分区后把备份的签名写回，否则下次启动会因找不到根分区而 panic。
-- 因为 Nikki 的 apk 未签名（其官方安装脚本也用 `--allow-untrusted`），构建时关闭了 Image Builder 的签名校验；官方包仍从 `downloads.openwrt.org` 走 HTTPS 拉取。
+- 本地编译的 sing-box apk 和 Argon 的 release apk 都没有构建环境认可的签名，所以构建时关闭了 Image Builder 的签名校验；官方包仍从 `downloads.openwrt.org` 走 HTTPS 拉取，Argon 额外用 PIN 的 SHA256 校验。
 - 用的是 **ext4** 系统镜像：根分区直接可写，没有 overlay；根分区在构建时按 `rootfs_mb` 固定，运行时不做在线扩容（builder 用 `make_ext4fs` 生成的 ext4 不支持加组），eMMC 剩余空间由首启脚本建成 `/mnt/data`。代价是没有 `firstboot` 恢复出厂，重装只能 U-Boot 重刷或提前导出配置。
 - 选 `openclash` 时会预置 `mihomo` 内核到 `/etc/openclash/core/clash_meta`，避免首启时联网下载。
 
-### 3.3 为什么不用源码全量编译
+### 3.3 为什么不全量编译
 
-整棵 OpenWrt 源码编译需要 20–30 GB 磁盘和数小时，托管 Runner 撑不住。Image Builder 3–5 分钟出同版本官方包，只有确实要改内核/驱动时才值得上自建 Runner 做全量编译。
+整棵 OpenWrt 源码编译需要 20–30 GB 磁盘和数小时，托管 Runner 撑不住。固件仍然用 Image Builder 出（3–5 分钟），只有 feed 版本落后的 sing-box 用 SDK 单独编译一个包（约 10 分钟），其余全部用官方预编译包。只有确实要改内核/驱动时才值得上自建 Runner 做全量编译。
 
 ## 4. 刷机（U-Boot 网页恢复）
 
@@ -72,24 +77,26 @@ MV1000 是双核 A53 1GHz / 1GB RAM，代理吞吐大约 100–300 Mbps（协议
 
 切换前先用一台电脑手动设静态 IP `192.168.1.103`、网关/DNS `192.168.1.2` 验证代理可用，再改全局 DHCP。
 
-## 6. Nikki 配置
+## 6. sing-box 配置
 
-1. 「网络 → Nikki → 配置文件 → 订阅」添加订阅链接，点「更新」，然后在「插件配置」里选中该配置文件并勾选「启用」。
-2. 「代理配置」：启用；TCP 模式 `TPROXY`；UDP 模式 `TPROXY`；开启 IPv4 DNS 劫持；IPv6 代理关闭。
-3. 「局域网代理」：启用，入站接口 `br-lan`；「访问控制」加一行全部留空的规则（匹配所有流量）。
-4. 需要国内直连可开「绕过 → 绕过中国大陆 IP」，也可交给订阅自带的规则。
-5. 「网络 → DHCP/DNS」里关闭 **DNS 重定向**，否则会和 Nikki 的 DNS 劫持打架。
-6. 保存并应用，看日志确认 mihomo 启动、无 `Too many open files`。
+没有 LuCI 应用，全部走 SSH + JSON 配置：
 
-> 路由器自身流量默认不代理，保持关闭即可，避免 mihomo 出站再被自己劫持。升级订阅后手动「重载」或「重启」。
+1. 编辑 `/etc/sing-box/config.json`（OpenWrt 包的默认路径），按 sing-box 官方文档写 inbounds / outbounds / route。旁路由典型做法：`tun` 入站 + `auto_route`，或 `mixed` 入站配合防火墙重定向。
+2. `/etc/config/sing-box` 里 `option enabled '1'`；用 TUN 时把 `option user` 改成 `root`（默认 `sing-box` 用户没有创建 TUN 的权限）。
+3. `/etc/init.d/sing-box enable && /etc/init.d/sing-box start`，`logread -f | grep sing-box` 看启动日志。
+4. 需要网页面板时，在配置里开 `experimental.clash_api`：`external_controller` 设 `0.0.0.0:9090`（务必同时设 `secret`），`external_ui` 指向一个空目录（如 `/etc/sing-box/ui`）。目录为空时 sing-box 会按 `external_ui_download_url` 下载面板 ZIP，默认是 GitHub 上的 Yacd；国内拉不动就把 URL 换成镜像地址。面板只在目录为空时下载一次，不会自动更新。
+5. 改完配置用 `/etc/init.d/sing-box restart` 生效；升级订阅就是替换 config.json 再 restart。
+
+> 路由器自身流量是否走代理由 route 规则决定；旁路由场景一般把 `br-lan` 的转发流量导入 tun，本机流量直连，避免回环。
 
 ## 7. 验证与排错
 
 ```sh
 # 旁路由上
-nft list ruleset | grep -i nikki      # 规则是否生成
-ps | grep mihomo                      # 内核是否在跑
-logread | tail -50
+pgrep -af 'sing-box run'             # 进程是否在跑
+logread | grep -i sing-box           # 启动日志
+ip link show tun0                    # TUN 是否建起来
+curl -s -H "Authorization: Bearer <secret>" http://127.0.0.1:9090/proxies | head
 
 # 终端上（网关/DNS 都应是 192.168.1.2）
 curl -s https://api.ipify.org         # 应显示代理出口 IP
@@ -100,8 +107,9 @@ nslookup google.com 192.168.1.2
 
 - **终端没网、旁路由正常**：检查 XDR 的网关/DNS 是否真的下发成 `.2`（终端 `ipconfig /all` 看租约），必要时重启终端网卡。
 - **部分 App 仍显示国内 IP**：浏览器 DoH/DoT、或应用自带 DNS 会绕过劫持；在 App 内关掉安全 DNS。
-- **IPv6 泄漏**：XDR 的 IPv6 必须关闭，或确认 Nikki 的 IPv6 劫持已开。
-- **Nikki 启动失败**：多半是订阅格式不含 `proxies`/`proxy-providers`，或本机时间不对（NTP 未同步）。
+- **IPv6 泄漏**：XDR 的 IPv6 必须关闭，或确认 sing-box 的 DNS/route 规则覆盖了 IPv6。
+- **sing-box 启动失败**：先 `sing-box check -c /etc/sing-box/config.json` 校验配置；常见是用了 tiny 未编译的出站类型（WireGuard/DHCP/ACME/Tailscale），或 TUN 模式下 `user` 没改成 `root`。
+- **端口 53 被 dnsmasq 占用**：用 TUN + `auto_route` 时无需自己监听 53；若配置了 DNS 入站，先在「DHCP/DNS」里关闭 dnsmasq 的 DNS 服务。
 
 ## 8. 回滚
 
@@ -112,9 +120,11 @@ nslookup google.com 192.168.1.2
 ## 参考
 
 - OpenWrt 设备页：<https://openwrt.org/toh/gl.inet/gl-mv1000>
-- 25.12.6 固件/Image Builder：<https://downloads.openwrt.org/releases/25.12.6/targets/mvebu/cortexa53/>
+- 25.12.6 固件 / Image Builder / SDK：<https://downloads.openwrt.org/releases/25.12.6/targets/mvebu/cortexa53/>
 - Image Builder 文档：<https://openwrt.org/docs/guide-user/additional-software/imagebuilder>
 - GL U-Boot 恢复：<https://docs.gl-inet.cn/router/3/features/uboot/>
-- Nikki：<https://github.com/nikkinikki-org/OpenWrt-nikki>
+- sing-box：<https://github.com/SagerNet/sing-box>
+- sing-box OpenWrt 包定义：<https://github.com/openwrt/packages/blob/openwrt-25.12/net/sing-box/Makefile>
+- luci-theme-argon：<https://github.com/jerrykuku/luci-theme-argon>
 - OpenClash：<https://github.com/vernesong/OpenClash>
 - PassWall：<https://github.com/Openwrt-Passwall/openwrt-passwall>
