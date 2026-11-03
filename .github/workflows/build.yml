@@ -1,0 +1,148 @@
+name: Build MV1000 firmware
+
+on:
+  workflow_dispatch:
+    inputs:
+      plugin:
+        description: "Proxy plugin preinstalled in the image"
+        type: choice
+        options:
+          - nikki
+          - openclash
+          - none
+        default: nikki
+      rootfs_mb:
+        description: "Root filesystem size in MB (256 / 512 / 1024)"
+        type: string
+        default: "512"
+  push:
+    branches: [main]
+    paths:
+      - "files/**"
+      - ".github/workflows/build.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  OWRT_VERSION: "25.12.6"
+  TARGET_PATH: "mvebu/cortexa53"
+  TARGET_NAME: "mvebu-cortexa53"
+  PROFILE: "glinet_gl-mv1000"
+  PLUGIN: ${{ inputs.plugin || 'nikki' }}
+  ROOTFS_MB: ${{ inputs.rootfs_mb || '512' }}
+  NIKKI_FEED: "https://nikkinikki.pages.dev/openwrt-25.12/aarch64_cortex-a53/nikki"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install zstd
+        run: |
+          if ! command -v zstd >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y zstd
+          fi
+
+      - name: Download and verify Image Builder
+        run: |
+          set -euo pipefail
+          IB="openwrt-imagebuilder-${OWRT_VERSION}-${TARGET_NAME}.Linux-x86_64.tar.zst"
+          BASE="https://downloads.openwrt.org/releases/${OWRT_VERSION}/targets/${TARGET_PATH}"
+          curl -fsSL -o "$IB" "$BASE/$IB"
+          curl -fsSL -o sha256sums "$BASE/sha256sums"
+          grep -F "$IB" sha256sums | sha256sum -c -
+          tar --zstd -xf "$IB"
+
+      - name: Prepare Image Builder
+        run: |
+          set -euo pipefail
+          cd "openwrt-imagebuilder-${OWRT_VERSION}-${TARGET_NAME}.Linux-x86_64"
+          echo "IB_DIR=$PWD" >> "$GITHUB_ENV"
+          # Third-party apk packages (Nikki) are unsigned, so build-time
+          # signature verification has to be off. Official feeds are still
+          # fetched over HTTPS from downloads.openwrt.org.
+          sed -i 's/^CONFIG_SIGNATURE_CHECK=.*/# CONFIG_SIGNATURE_CHECK is not set/' .config
+          mkdir -p packages
+          chmod +x "$GITHUB_WORKSPACE/files/etc/uci-defaults/99-bypass-router"
+
+      - name: Fetch proxy plugin packages
+        run: |
+          set -euo pipefail
+          mkdir -p "$IB_DIR/packages"
+          pkgs="luci luci-i18n-base-zh-cn luci-i18n-firewall-zh-cn luci-app-package-manager luci-i18n-package-manager-zh-cn curl ca-bundle"
+
+          case "$PLUGIN" in
+            nikki)
+              curl -fsSL "$NIKKI_FEED/index.json" -o /tmp/nikki-index.json
+              pkgver() {
+                python3 -c 'import json,sys;print(json.load(open("/tmp/nikki-index.json"))["packages"][sys.argv[1]])' "$1"
+              }
+              for p in \
+                "mihomo-meta-$(pkgver mihomo-meta).apk" \
+                "nikki-$(pkgver nikki).apk" \
+                "luci-app-nikki-$(pkgver luci-app-nikki).apk" \
+                "luci-i18n-nikki-zh-cn-$(pkgver luci-i18n-nikki-zh-cn).apk"
+              do
+                curl -fsSL -o "$IB_DIR/packages/$p" "$NIKKI_FEED/$p"
+              done
+              pkgs="$pkgs mihomo-meta nikki luci-app-nikki luci-i18n-nikki-zh-cn"
+              ;;
+            openclash)
+              oc_url=$(curl -fsSL https://api.github.com/repos/vernesong/OpenClash/releases/latest \
+                | jq -r '[.assets[] | select(.name | endswith(".apk")) | .browser_download_url][0]')
+              curl -fsSL -o "$IB_DIR/packages/$(basename "$oc_url")" "$oc_url"
+
+              # OpenClash downloads its core on first start; seed it so the
+              # router does not need GitHub access to become functional.
+              core_url=$(curl -fsSL https://api.github.com/repos/MetaCubeX/mihomo/releases/latest \
+                | jq -r '[.assets[] | select(.name | test("^mihomo-linux-arm64-v.*\\.gz$")) | .browser_download_url][0]')
+              mkdir -p "$GITHUB_WORKSPACE/files/etc/openclash/core"
+              curl -fsSL "$core_url" | gunzip > "$GITHUB_WORKSPACE/files/etc/openclash/core/clash_meta"
+              chmod +x "$GITHUB_WORKSPACE/files/etc/openclash/core/clash_meta"
+
+              pkgs="-dnsmasq dnsmasq-full luci-compat luci-app-openclash $pkgs"
+              ;;
+            none) ;;
+            *) echo "unknown plugin: $PLUGIN"; exit 1 ;;
+          esac
+
+          echo "PKGS=$pkgs" >> "$GITHUB_ENV"
+
+      - name: Build image
+        run: |
+          set -euo pipefail
+          cd "$IB_DIR"
+          make image \
+            PROFILE="$PROFILE" \
+            PACKAGES="$PKGS" \
+            FILES="$GITHUB_WORKSPACE/files" \
+            ROOTFS_PARTSIZE="$ROOTFS_MB" \
+            EXTRA_IMAGE_NAME="mv1000-${PLUGIN}"
+          ls -lh bin/targets/"$TARGET_PATH"/
+
+      - name: Upload image
+        uses: actions/upload-artifact@v4
+        with:
+          name: openwrt-${{ env.OWRT_VERSION }}-mv1000-${{ env.PLUGIN }}
+          path: |
+            openwrt-imagebuilder-*/bin/targets/mvebu/cortexa53/*ext4-sdcard.img.gz
+            openwrt-imagebuilder-*/bin/targets/mvebu/cortexa53/sha256sums
+          if-no-files-found: error
+
+      - name: Publish release assets on tag
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            openwrt-imagebuilder-*/bin/targets/mvebu/cortexa53/*ext4-sdcard.img.gz \
+            --title "$GITHUB_REF_NAME" --generate-notes
