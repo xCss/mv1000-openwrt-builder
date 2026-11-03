@@ -19,6 +19,7 @@ on:
     branches: [main]
     paths:
       - "files/**"
+      - "singbox.env"
       - ".github/workflows/build.yml"
 
 permissions:
@@ -35,34 +36,58 @@ env:
   PROFILE: "glinet_gl-mv1000"
   PLUGIN: ${{ inputs.plugin || 'singbox' }}
   ROOTFS_MB: ${{ inputs.rootfs_mb || '256' }}
-  SINGBOX_VERSION: "1.14.4"
-  SINGBOX_HASH: "0958ccd23b1ea9a141d715d15478b1e040fd04bcca19d8ff5529636b1b753e18"
   ARGON_VERSION: "3.1.2"
   ARGON_HASH: "3fdbd812dafd521926891863a372aba78ab83ec24add47bdda910fb1f6b1be40"
 
 jobs:
-  build:
+  # A pushed change can land before the sing-box workflow has published the
+  # pinned apk. Skip (do not fail) until singbox.env points at an existing
+  # release; the sing-box workflow dispatches this one once it does.
+  preflight:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    outputs:
+      ok: ${{ steps.check.outputs.ok }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check package availability
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          ok=true
+          if [ "$PLUGIN" = "singbox" ]; then
+            version=$(sed -n 's/^SINGBOX_VERSION=//p' singbox.env 2>/dev/null || true)
+            sha=$(sed -n 's/^SINGBOX_APK_SHA256=//p' singbox.env 2>/dev/null || true)
+            if [ -z "$version" ] || [ -z "$sha" ]; then
+              ok=false
+              echo "::warning::singbox.env is not pinned yet; waiting for the sing-box workflow"
+            elif ! gh release view "singbox-tiny-v$version" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              ok=false
+              echo "::warning::release singbox-tiny-v$version is missing; waiting for the sing-box workflow"
+            fi
+          fi
+          echo "ok=$ok" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: preflight
+    if: needs.preflight.outputs.ok == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
 
     steps:
       - uses: actions/checkout@v7
+
+      - name: Load sing-box package pin
+        if: env.PLUGIN == 'singbox'
+        run: cat singbox.env >> "$GITHUB_ENV"
 
       - name: Install build prerequisites
         run: |
           sudo apt-get update
           sudo apt-get install -y zstd build-essential libncurses-dev zlib1g-dev \
             libssl-dev rsync unzip file
-
-      # Keyed on the build inputs only, so changes under files/ reuse the
-      # previously compiled apk instead of rebuilding it every push.
-      - name: Cache built sing-box apk
-        if: env.PLUGIN == 'singbox'
-        id: singbox-cache
-        uses: actions/cache@v6
-        with:
-          path: ${{ github.workspace }}/singbox-apk
-          key: singbox-${{ env.OWRT_VERSION }}-${{ env.SINGBOX_VERSION }}-${{ env.SINGBOX_HASH }}-v1
 
       - name: Download and verify Image Builder
         run: |
@@ -74,65 +99,31 @@ jobs:
           grep -F "$IB" sha256sums | sha256sum -c -
           tar --zstd -xf "$IB"
 
-      - name: Download and verify OpenWrt SDK
-        if: env.PLUGIN == 'singbox' && steps.singbox-cache.outputs.cache-hit != 'true'
-        run: |
-          set -euo pipefail
-          SDK="openwrt-sdk-${OWRT_VERSION}-${TARGET_NAME}_gcc-14.3.0_musl.Linux-x86_64.tar.zst"
-          BASE="https://downloads.openwrt.org/releases/${OWRT_VERSION}/targets/${TARGET_PATH}"
-          curl -fsSL -o "$SDK" "$BASE/$SDK"
-          curl -fsSL -o sha256sums.sdk "$BASE/sha256sums"
-          grep -F "$SDK" sha256sums.sdk | sha256sum -c -
-          tar --zstd -xf "$SDK"
-          echo "SDK_DIR=$PWD/${SDK%.tar.zst}" >> "$GITHUB_ENV"
-
       - name: Prepare Image Builder
         run: |
           set -euo pipefail
           cd "openwrt-imagebuilder-${OWRT_VERSION}-${TARGET_NAME}.Linux-x86_64"
           echo "IB_DIR=$PWD" >> "$GITHUB_ENV"
-          # Third-party apk packages (argon, locally built sing-box) are not
-          # signed with a key known to the build, so signature verification has
-          # to be off. Official feeds are still fetched over HTTPS from
+          # Third-party apk packages (argon, sing-box-tiny) are not signed with
+          # a key known to the build, so signature verification has to be off.
+          # Official feeds are still fetched over HTTPS from
           # downloads.openwrt.org.
           sed -i 's/^CONFIG_SIGNATURE_CHECK=.*/# CONFIG_SIGNATURE_CHECK is not set/' .config
           mkdir -p packages
           chmod +x "$GITHUB_WORKSPACE"/files/etc/uci-defaults/*
 
-      - name: Build sing-box-tiny apk
-        if: env.PLUGIN == 'singbox' && steps.singbox-cache.outputs.cache-hit != 'true'
-        run: |
-          set -euo pipefail
-          cd "$SDK_DIR"
-
-          # The feed pins 1.13.21; move it to the current upstream release so the
-          # binary is built against a patched Go stdlib and upstream fixes.
-          ./scripts/feeds update packages
-          sed -i "s/^PKG_VERSION:=.*/PKG_VERSION:=${SINGBOX_VERSION}/" feeds/packages/net/sing-box/Makefile
-          sed -i "s/^PKG_HASH:=.*/PKG_HASH:=${SINGBOX_HASH}/" feeds/packages/net/sing-box/Makefile
-          grep -E '^PKG_(VERSION|HASH):=' feeds/packages/net/sing-box/Makefile
-
-          # Install the whole feed: golang pulls in golang1.26/host and its
-          # bootstrap as host build dependencies.
-          ./scripts/feeds install -a -p packages
-          echo "CONFIG_PACKAGE_sing-box-tiny=y" >> .config
-          echo "CONFIG_PACKAGE_sing-box=n" >> .config
-          make defconfig
-          grep 'CONFIG_PACKAGE_sing-box' .config
-          make package/sing-box/compile BUILD_VARIANT=tiny -j"$(nproc)" V=s
-
-          find bin/packages -name 'sing-box*.apk' -print
-          apk=$(find bin/packages -name 'sing-box-tiny-*.apk' | head -n1)
-          test -n "$apk"
-          mkdir -p "$GITHUB_WORKSPACE/singbox-apk"
-          cp "$apk" "$GITHUB_WORKSPACE/singbox-apk/"
-
-      - name: Stage sing-box apk
+      - name: Download sing-box apk
         if: env.PLUGIN == 'singbox'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          cp "$GITHUB_WORKSPACE"/singbox-apk/sing-box-tiny-*.apk "$IB_DIR/packages/"
-          ls -lh "$IB_DIR/packages/"
+          mkdir -p "$RUNNER_TEMP/singbox"
+          gh release download "singbox-tiny-v${SINGBOX_VERSION}" --repo "$GITHUB_REPOSITORY" \
+            --pattern 'sing-box-tiny-*.apk' --dir "$RUNNER_TEMP/singbox" --clobber
+          apk=$(ls "$RUNNER_TEMP"/singbox/sing-box-tiny-*.apk)
+          echo "${SINGBOX_APK_SHA256}  $apk" | sha256sum -c -
+          cp "$apk" "$IB_DIR/packages/"
 
       - name: Fetch theme and plugin packages
         run: |

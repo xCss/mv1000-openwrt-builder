@@ -1,0 +1,177 @@
+name: Build sing-box-tiny package
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/singbox.yml"
+      - "singbox.env"
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: singbox-tiny
+  cancel-in-progress: false
+
+env:
+  OWRT_VERSION: "25.12.6"
+  TARGET_PATH: "mvebu/cortexa53"
+  TARGET_NAME: "mvebu-cortexa53"
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Resolve upstream version
+        id: resolve
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          pin=$(sed -n 's/^SINGBOX_PIN=//p' singbox.env 2>/dev/null | head -n1)
+          if [ "$pin" = "1" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "singbox.env is pinned manually; skipping auto-update"
+            exit 0
+          fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+          version=$(gh api repos/SagerNet/sing-box/releases/latest --jq '.tag_name' | sed 's/^v//')
+          test -n "$version"
+          tag="singbox-tiny-v$version"
+
+          assets=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets \
+            --jq '.assets[].name' 2>/dev/null || true)
+          case "$assets" in
+            *sing-box-tiny-*.apk*) published=true ;;
+            *) published=false ;;
+          esac
+
+          cur_version=$(sed -n 's/^SINGBOX_VERSION=//p' singbox.env 2>/dev/null || true)
+          cur_sha=$(sed -n 's/^SINGBOX_APK_SHA256=//p' singbox.env 2>/dev/null || true)
+          if [ "$cur_version" = "$version" ] && [ -n "$cur_sha" ]; then
+            pinned=true
+          else
+            pinned=false
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "published=$published" >> "$GITHUB_OUTPUT"
+          echo "pinned=$pinned" >> "$GITHUB_OUTPUT"
+          echo "upstream v$version (published=$published, pinned=$pinned)"
+
+      - name: Install build prerequisites
+        if: steps.resolve.outputs.skip != 'true' && steps.resolve.outputs.published == 'false'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zstd build-essential libncurses-dev zlib1g-dev \
+            libssl-dev rsync unzip file
+
+      - name: Download and verify OpenWrt SDK
+        if: steps.resolve.outputs.skip != 'true' && steps.resolve.outputs.published == 'false'
+        run: |
+          set -euo pipefail
+          SDK="openwrt-sdk-${OWRT_VERSION}-${TARGET_NAME}_gcc-14.3.0_musl.Linux-x86_64.tar.zst"
+          BASE="https://downloads.openwrt.org/releases/${OWRT_VERSION}/targets/${TARGET_PATH}"
+          curl -fsSL -o "$SDK" "$BASE/$SDK"
+          curl -fsSL -o sha256sums.sdk "$BASE/sha256sums"
+          grep -F "$SDK" sha256sums.sdk | sha256sum -c -
+          tar --zstd -xf "$SDK"
+          echo "SDK_DIR=$PWD/${SDK%.tar.zst}" >> "$GITHUB_ENV"
+
+      - name: Build sing-box-tiny apk
+        if: steps.resolve.outputs.skip != 'true' && steps.resolve.outputs.published == 'false'
+        env:
+          VERSION: ${{ steps.resolve.outputs.version }}
+        run: |
+          set -euo pipefail
+          cd "$SDK_DIR"
+
+          # Hash the exact archive the feed Makefile fetches. The trailing ?
+          # in PKG_SOURCE_URL makes the build system use this URL as-is.
+          src="$RUNNER_TEMP/sing-box-$VERSION.tar.gz"
+          curl -fsSL -o "$src" "https://codeload.github.com/SagerNet/sing-box/tar.gz/v$VERSION"
+          hash=$(sha256sum "$src" | cut -d' ' -f1)
+
+          ./scripts/feeds update packages
+          sed -i "s/^PKG_VERSION:=.*/PKG_VERSION:=$VERSION/" feeds/packages/net/sing-box/Makefile
+          sed -i "s/^PKG_HASH:=.*/PKG_HASH:=$hash/" feeds/packages/net/sing-box/Makefile
+          grep -E '^PKG_(VERSION|HASH):=' feeds/packages/net/sing-box/Makefile
+
+          # Install the whole feed: golang pulls in golang1.26/host and its
+          # bootstrap as host build dependencies.
+          ./scripts/feeds install -a -p packages
+          echo "CONFIG_PACKAGE_sing-box-tiny=y" >> .config
+          echo "CONFIG_PACKAGE_sing-box=n" >> .config
+          make defconfig
+          make package/sing-box/compile BUILD_VARIANT=tiny -j"$(nproc)" V=s
+
+          apk=$(find bin/packages -name 'sing-box-tiny-*.apk' | head -n1)
+          test -n "$apk"
+          cp "$apk" "$GITHUB_WORKSPACE/"
+          cd "$GITHUB_WORKSPACE"
+          sha256sum "$(basename "$apk")" > sha256sums
+          cat sha256sums
+
+      - name: Publish release
+        if: steps.resolve.outputs.skip != 'true' && steps.resolve.outputs.published == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.resolve.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh release create "singbox-tiny-v$VERSION" \
+            "$GITHUB_WORKSPACE"/sing-box-tiny-*.apk "$GITHUB_WORKSPACE/sha256sums" \
+            --title "sing-box-tiny v$VERSION" \
+            --notes "Auto-built from SagerNet/sing-box v$VERSION with the OpenWrt ${OWRT_VERSION} SDK."
+
+      - name: Pin singbox.env
+        id: pin
+        if: steps.resolve.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.resolve.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.resolve.outputs.published }}" = "true" ] \
+              && [ "${{ steps.resolve.outputs.pinned }}" = "true" ]; then
+            echo "already pinned to the latest release"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -f "$GITHUB_WORKSPACE/sha256sums" ]; then
+            sha=$(awk 'NF {print $1; exit}' "$GITHUB_WORKSPACE/sha256sums")
+          else
+            mkdir -p "$RUNNER_TEMP/release"
+            gh release download "singbox-tiny-v$VERSION" --repo "$GITHUB_REPOSITORY" \
+              --pattern 'sha256sums' --dir "$RUNNER_TEMP/release" --clobber
+            sha=$(awk 'NF {print $1; exit}' "$RUNNER_TEMP/release/sha256sums")
+          fi
+          test -n "$sha"
+          printf 'SINGBOX_PIN=0\nSINGBOX_VERSION=%s\nSINGBOX_APK_SHA256=%s\n' "$VERSION" "$sha" > singbox.env
+
+          if git diff --quiet -- singbox.env; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add singbox.env
+          git commit -m "sing-box-tiny: pin v$VERSION"
+          git push
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Trigger firmware build
+        if: steps.pin.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run build.yml --ref "$GITHUB_REF_NAME"
