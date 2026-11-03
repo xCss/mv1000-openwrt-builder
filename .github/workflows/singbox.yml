@@ -146,15 +146,23 @@ jobs:
           # Install the whole feed: golang pulls in golang1.26/host and its
           # bootstrap as host build dependencies.
           ./scripts/feeds install -a -p packages
+
+          # The SDK ships a config with every kernel module selected one by
+          # one (it is generated with ALL_KMODS), so toggling ALL_KMODS alone
+          # does nothing. Only kmod-tun/kmod-inet-diag are needed here;
+          # leaving the other ~900 selected means packing the whole module
+          # tree and adds ~10 minutes to the build.
+          sed -i -E 's/^CONFIG_PACKAGE_kmod-[^=]+=[ym]$/# &/' .config
+          echo "CONFIG_ALL_KMODS=n" >> .config
           echo "CONFIG_PACKAGE_sing-box-tiny=y" >> .config
           echo "CONFIG_PACKAGE_sing-box=n" >> .config
-          # The SDK defaults to building every kernel module. Only the
-          # sing-box-tiny apk is wanted here, so drop the other ~900 kmods
-          # that otherwise dominate the build time.
-          echo "CONFIG_ALL_KMODS=n" >> .config
+          echo "CONFIG_PACKAGE_kmod-tun=y" >> .config
+          echo "CONFIG_PACKAGE_kmod-inet-diag=y" >> .config
           make defconfig
-          if grep -qx 'CONFIG_ALL_KMODS=y' .config; then
-            echo "::error::CONFIG_ALL_KMODS is still enabled; refusing the slow build"
+          kmods=$(grep -c '^CONFIG_PACKAGE_kmod-[^=]*=y' .config || true)
+          echo "selected kmod packages after defconfig: $kmods"
+          if [ "$kmods" -gt 20 ]; then
+            echo "::error::still selecting $kmods kernel modules; refusing the slow build"
             exit 1
           fi
           make package/sing-box/compile BUILD_VARIANT=tiny -j"$(nproc)" V=s
