@@ -219,6 +219,7 @@ jobs:
           ( cd "$root" && find . -type f,l | sed 's|^\.|/|' | sort ) > "$work/sing-box-tiny.list"
           mv "$work/sing-box-tiny.list" "$root/lib/apk/packages/sing-box-tiny.list"
           chmod 0644 "$root/lib/apk/packages/sing-box-tiny.list"
+          cat "$root/lib/apk/packages/sing-box-tiny.list"
 
           printf '/etc/config/sing-box\n/etc/sing-box/\n' \
             > "$root/lib/apk/packages/sing-box-tiny.conffiles"
@@ -252,8 +253,10 @@ jobs:
 
           apk="$SDK_DIR/staging_dir/host/bin/apk"
           out="$work/sing-box-tiny-$pkgver.apk"
-          # mkpkg takes file ownership from the filesystem, so it runs as root:
-          # uid 0 resolves to root:root without needing fakeroot in the image.
+          # mkpkg records owners from the filesystem, so the tree has to be
+          # root-owned before packing; running the packer itself as root is
+          # not enough.
+          sudo chown -R 0:0 "$root"
           sudo "$apk" mkpkg \
             --info "name:sing-box-tiny" \
             --info "version:$pkgver" \
