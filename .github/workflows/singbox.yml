@@ -147,13 +147,14 @@ jobs:
           # bootstrap as host build dependencies.
           ./scripts/feeds install -a -p packages
 
-          # The SDK ships a config with every kernel module selected one by
-          # one (it is generated with ALL_KMODS), so toggling ALL_KMODS alone
-          # does nothing. Only kmod-tun/kmod-inet-diag are needed here;
-          # leaving the other ~900 selected means packing the whole module
-          # tree and adds ~10 minutes to the build.
+          # A plain SDK .config selects the entire kernel module tree, which
+          # makes packaging the sing-box apk build ~900 unrelated kmods. Seed
+          # a config first, then strip every kmod except the two that
+          # sing-box-tiny depends on (kmod-tun, kmod-inet-diag).
+          touch .config
+          printf 'CONFIG_ALL=n\nCONFIG_ALL_KMODS=n\nCONFIG_ALL_NONSHARED=n\n' >> .config
+          make defconfig
           sed -i -E 's/^CONFIG_PACKAGE_kmod-[^=]+=[ym]$/# &/' .config
-          echo "CONFIG_ALL_KMODS=n" >> .config
           echo "CONFIG_PACKAGE_sing-box-tiny=y" >> .config
           echo "CONFIG_PACKAGE_sing-box=n" >> .config
           echo "CONFIG_PACKAGE_kmod-tun=y" >> .config
