@@ -66,6 +66,14 @@ jobs:
           test -n "$version"
           tag="singbox-tiny-v$version"
 
+          apk_version="$version"
+          case "$version" in
+            *-alpha.*) apk_version=$(printf '%s' "$version" | sed 's/-alpha\./_alpha/') ;;
+            *-beta.*)  apk_version=$(printf '%s' "$version" | sed 's/-beta\./_beta/') ;;
+            *-rc.*)    apk_version=$(printf '%s' "$version" | sed 's/-rc\./_rc/') ;;
+          esac
+          echo "apk_version=$apk_version" >> "$GITHUB_OUTPUT"
+
           assets=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets \
             --jq '.assets[].name' 2>/dev/null || true)
           case "$assets" in
@@ -109,6 +117,7 @@ jobs:
         if: steps.resolve.outputs.skip != 'true' && steps.resolve.outputs.published == 'false'
         env:
           VERSION: ${{ steps.resolve.outputs.version }}
+          APK_VERSION: ${{ steps.resolve.outputs.apk_version }}
         run: |
           set -euo pipefail
           cd "$SDK_DIR"
@@ -120,9 +129,19 @@ jobs:
           hash=$(sha256sum "$src" | cut -d' ' -f1)
 
           ./scripts/feeds update packages
-          sed -i "s/^PKG_VERSION:=.*/PKG_VERSION:=$VERSION/" feeds/packages/net/sing-box/Makefile
-          sed -i "s/^PKG_HASH:=.*/PKG_HASH:=$hash/" feeds/packages/net/sing-box/Makefile
-          grep -E '^PKG_(VERSION|HASH):=' feeds/packages/net/sing-box/Makefile
+          mf=feeds/packages/net/sing-box/Makefile
+          if [ "$APK_VERSION" != "$VERSION" ]; then
+            # apk rejects pre-release tags such as 1.15.0-alpha.13. Keep the
+            # upstream version for the source tarball, the build directory and
+            # the embedded version string; only the package version is normalized.
+            sed -i '/^PKG_VERSION:=/a PKG_BUILD_DIR:=$(BUILD_DIR)/$(if $(BUILD_VARIANT),$(PKG_NAME)-$(BUILD_VARIANT)/)sing-box-'"$VERSION" "$mf"
+            sed -i "s|^PKG_SOURCE:=.*|PKG_SOURCE:=sing-box-$VERSION.tar.gz|" "$mf"
+            sed -i "s|^PKG_SOURCE_URL:=.*|PKG_SOURCE_URL:=https://codeload.github.com/SagerNet/sing-box/tar.gz/v$VERSION?|" "$mf"
+            sed -i "s|^GO_PKG_LDFLAGS_X:=.*|GO_PKG_LDFLAGS_X:=github.com/sagernet/sing-box/constant.Version=$VERSION|" "$mf"
+          fi
+          sed -i "s/^PKG_VERSION:=.*/PKG_VERSION:=$APK_VERSION/" "$mf"
+          sed -i "s/^PKG_HASH:=.*/PKG_HASH:=$hash/" "$mf"
+          grep -E '^PKG_(VERSION|HASH|SOURCE|SOURCE_URL):=|^PKG_BUILD_DIR:=|^GO_PKG_LDFLAGS_X:=' "$mf"
 
           # Install the whole feed: golang pulls in golang1.26/host and its
           # bootstrap as host build dependencies.
