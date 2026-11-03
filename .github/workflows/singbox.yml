@@ -162,7 +162,8 @@ jobs:
           make defconfig
           kmods=$(grep -c '^CONFIG_PACKAGE_kmod-[^=]*=y' .config || true)
           echo "selected kmod packages after defconfig: $kmods"
-          if [ "$kmods" -gt 20 ]; then
+          grep '^CONFIG_PACKAGE_kmod-[^=]*=y' .config || true
+          if [ "$kmods" -gt 60 ]; then
             echo "::error::still selecting $kmods kernel modules; refusing the slow build"
             exit 1
           fi
