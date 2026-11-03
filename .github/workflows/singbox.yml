@@ -10,6 +10,11 @@ on:
         type: string
         required: false
         default: ""
+      force:
+        description: "Rebuild even if the release already has an apk"
+        type: boolean
+        required: false
+        default: false
   push:
     branches: [main]
     paths:
@@ -28,11 +33,14 @@ env:
   OWRT_VERSION: "25.12.6"
   TARGET_PATH: "mvebu/cortexa53"
   TARGET_NAME: "mvebu-cortexa53"
+  PKG_ARCH: "aarch64_cortex-a53"
+  GO_VERSION: "1.26.9"
+  GO_TAGS: "with_gvisor,with_quic,with_utls,with_clash_api,badlinkname,tfogo_checklinkname0"
 
 jobs:
   package:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v7
@@ -41,6 +49,7 @@ jobs:
         id: resolve
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FORCE: ${{ inputs.force }}
         run: |
           set -euo pipefail
           echo "skip=false" >> "$GITHUB_OUTPUT"
@@ -80,6 +89,10 @@ jobs:
             *sing-box-tiny-*.apk*) published=true ;;
             *) published=false ;;
           esac
+          if [ "$FORCE" = "true" ]; then
+            echo "force requested; rebuilding over the published apk"
+            published=false
+          fi
 
           cur_version=$(sed -n 's/^SINGBOX_VERSION=//p' singbox.env 2>/dev/null || true)
           cur_sha=$(sed -n 's/^SINGBOX_APK_SHA256=//p' singbox.env 2>/dev/null || true)
@@ -94,86 +107,177 @@ jobs:
           echo "pinned=$pinned" >> "$GITHUB_OUTPUT"
           echo "upstream v$version (published=$published, pinned=$pinned)"
 
-      - name: Install build prerequisites
+      - name: Restore SDK host tools
+        id: sdk-cache
         if: steps.resolve.outputs.skip != 'true' && steps.resolve.outputs.published == 'false'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y zstd build-essential libncurses-dev zlib1g-dev \
-            libssl-dev rsync unzip file
+        uses: actions/cache@v4
+        with:
+          path: openwrt-sdk-*/staging_dir/host
+          key: sdk-host-${{ env.OWRT_VERSION }}-${{ env.TARGET_NAME }}-v1
 
       - name: Download and verify OpenWrt SDK
-        if: steps.resolve.outputs.skip != 'true' && steps.resolve.outputs.published == 'false'
+        if: steps.resolve.outputs.skip != 'true' && steps.resolve.outputs.published == 'false' && steps.sdk-cache.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y zstd
           SDK="openwrt-sdk-${OWRT_VERSION}-${TARGET_NAME}_gcc-14.3.0_musl.Linux-x86_64.tar.zst"
           BASE="https://downloads.openwrt.org/releases/${OWRT_VERSION}/targets/${TARGET_PATH}"
           curl -fsSL -o "$SDK" "$BASE/$SDK"
           curl -fsSL -o sha256sums.sdk "$BASE/sha256sums"
           grep -F "$SDK" sha256sums.sdk | sha256sum -c -
           tar --zstd -xf "$SDK"
-          echo "SDK_DIR=$PWD/${SDK%.tar.zst}" >> "$GITHUB_ENV"
+          rm -f "$SDK" sha256sums.sdk
 
-      - name: Build sing-box-tiny apk
+      - name: Check SDK host tools
+        if: steps.resolve.outputs.skip != 'true' && steps.resolve.outputs.published == 'false'
+        run: |
+          set -euo pipefail
+          sdk_dir="$GITHUB_WORKSPACE/openwrt-sdk-${OWRT_VERSION}-${TARGET_NAME}_gcc-14.3.0_musl.Linux-x86_64"
+          test -x "$sdk_dir/staging_dir/host/bin/apk"
+          echo "SDK_DIR=$sdk_dir" >> "$GITHUB_ENV"
+          "$sdk_dir/staging_dir/host/bin/apk" --version
+
+      - name: Restore Go toolchain
+        if: steps.resolve.outputs.skip != 'true' && steps.resolve.outputs.published == 'false'
+        uses: actions/cache@v4
+        with:
+          path: ~/go-sdk
+          key: go-toolchain-${{ env.GO_VERSION }}-v1
+
+      - name: Restore Go module and build cache
+        if: steps.resolve.outputs.skip != 'true' && steps.resolve.outputs.published == 'false'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/go-build
+          key: go-cache-${{ env.GO_VERSION }}-${{ steps.resolve.outputs.version }}
+          restore-keys: |
+            go-cache-${{ env.GO_VERSION }}-
+
+      - name: Cross-compile and package apk
         if: steps.resolve.outputs.skip != 'true' && steps.resolve.outputs.published == 'false'
         env:
           VERSION: ${{ steps.resolve.outputs.version }}
           APK_VERSION: ${{ steps.resolve.outputs.apk_version }}
         run: |
           set -euo pipefail
-          cd "$SDK_DIR"
+          pkgver="${APK_VERSION}-r1"
+          work="$RUNNER_TEMP/singbox"
+          rm -rf "$work"
+          root="$work/root"
+          mkdir -p "$root/usr/bin" "$root/etc/sing-box" "$root/etc/config" \
+            "$root/etc/init.d" "$root/lib/apk/packages" "$root/lib/upgrade/keep.d"
 
-          # Hash the exact archive the feed Makefile fetches. The trailing ?
-          # in PKG_SOURCE_URL makes the build system use this URL as-is.
-          src="$RUNNER_TEMP/sing-box-$VERSION.tar.gz"
-          curl -fsSL -o "$src" "https://codeload.github.com/SagerNet/sing-box/tar.gz/v$VERSION"
-          hash=$(sha256sum "$src" | cut -d' ' -f1)
-
-          ./scripts/feeds update packages
-          mf=feeds/packages/net/sing-box/Makefile
-          if [ "$APK_VERSION" != "$VERSION" ]; then
-            # apk rejects pre-release tags such as 1.15.0-alpha.13. Keep the
-            # upstream version for the source tarball, the build directory and
-            # the embedded version string; only the package version is normalized.
-            sed -i '/^PKG_VERSION:=/a PKG_BUILD_DIR:=$(BUILD_DIR)/$(if $(BUILD_VARIANT),$(PKG_NAME)-$(BUILD_VARIANT)/)sing-box-'"$VERSION" "$mf"
-            sed -i "s|^PKG_SOURCE:=.*|PKG_SOURCE:=sing-box-$VERSION.tar.gz|" "$mf"
-            sed -i "s|^PKG_SOURCE_URL:=.*|PKG_SOURCE_URL:=https://codeload.github.com/SagerNet/sing-box/tar.gz/v$VERSION?|" "$mf"
-            sed -i "s|^GO_PKG_LDFLAGS_X:=.*|GO_PKG_LDFLAGS_X:=github.com/sagernet/sing-box/constant.Version=$VERSION|" "$mf"
+          # Prebuilt official Go toolchain: the SDK's golang package would
+          # otherwise bootstrap Go from source (gcc -> Go 1.24 -> Go 1.26),
+          # which costs ~14 minutes for a ~2 minute build.
+          if [ ! -x "$HOME/go-sdk/go/bin/go" ]; then
+            curl -fsSL -o "$work/go.tgz" "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz"
+            mkdir -p "$HOME/go-sdk"
+            tar -xzf "$work/go.tgz" -C "$HOME/go-sdk"
           fi
-          sed -i "s/^PKG_VERSION:=.*/PKG_VERSION:=$APK_VERSION/" "$mf"
-          sed -i "s/^PKG_HASH:=.*/PKG_HASH:=$hash/" "$mf"
-          grep -E '^PKG_(VERSION|HASH|SOURCE|SOURCE_URL):=|^PKG_BUILD_DIR:=|^GO_PKG_LDFLAGS_X:=' "$mf"
+          export PATH="$HOME/go-sdk/go/bin:$PATH"
+          export GOMODCACHE="$HOME/go/pkg/mod"
+          export GOCACHE="$HOME/go-build"
+          go version
 
-          # Install the whole feed: golang pulls in golang1.26/host and its
-          # bootstrap as host build dependencies.
-          ./scripts/feeds install -a -p packages
+          mkdir -p "$work/src"
+          curl -fsSL -o "$work/sing-box-$VERSION.tar.gz" \
+            "https://codeload.github.com/SagerNet/sing-box/tar.gz/v$VERSION"
+          tar -xzf "$work/sing-box-$VERSION.tar.gz" -C "$work/src" --strip-components=1
 
-          # A plain SDK .config selects the entire kernel module tree, which
-          # makes packaging the sing-box apk build ~900 unrelated kmods. Seed
-          # a config first, then strip every kmod except the two that
-          # sing-box-tiny depends on (kmod-tun, kmod-inet-diag).
-          touch .config
-          printf 'CONFIG_ALL=n\nCONFIG_ALL_KMODS=n\nCONFIG_ALL_NONSHARED=n\n' >> .config
-          make defconfig
-          sed -i -E 's/^CONFIG_PACKAGE_kmod-[^=]+=[ym]$/# &/' .config
-          echo "CONFIG_PACKAGE_sing-box-tiny=y" >> .config
-          echo "CONFIG_PACKAGE_sing-box=n" >> .config
-          echo "CONFIG_PACKAGE_kmod-tun=y" >> .config
-          echo "CONFIG_PACKAGE_kmod-inet-diag=y" >> .config
-          make defconfig
-          kmods=$(grep -c '^CONFIG_PACKAGE_kmod-[^=]*=y' .config || true)
-          echo "selected kmod packages after defconfig: $kmods"
-          grep '^CONFIG_PACKAGE_kmod-[^=]*=y' .config || true
-          if [ "$kmods" -gt 60 ]; then
-            echo "::error::still selecting $kmods kernel modules; refusing the slow build"
-            exit 1
-          fi
-          make package/sing-box/compile BUILD_VARIANT=tiny -j"$(nproc)" V=s
+          (
+            cd "$work/src"
+            CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
+              go build -buildvcs=false -trimpath \
+                -tags "$GO_TAGS" \
+                -ldflags "-checklinkname=0 -s -w -X github.com/sagernet/sing-box/constant.Version=$VERSION" \
+                -o "$root/usr/bin/sing-box" ./cmd/sing-box
+          )
+          chmod 0755 "$root/usr/bin/sing-box"
+          file "$root/usr/bin/sing-box"
 
-          apk=$(find bin/packages -name 'sing-box-tiny-*.apk' | head -n1)
-          test -n "$apk"
-          cp "$apk" "$GITHUB_WORKSPACE/"
+          curl -fsSL -o "$root/etc/sing-box/config.json" \
+            "https://raw.githubusercontent.com/SagerNet/sing-box/v$VERSION/release/config/config.json"
+          chmod 0644 "$root/etc/sing-box/config.json"
+
+          feed="https://raw.githubusercontent.com/openwrt/packages/openwrt-25.12/net/sing-box/files"
+          curl -fsSL -o "$root/etc/config/sing-box" "$feed/sing-box.conf"
+          chmod 0600 "$root/etc/config/sing-box"
+          curl -fsSL -o "$root/etc/init.d/sing-box" "$feed/sing-box.init"
+          chmod 0755 "$root/etc/init.d/sing-box"
+
+          echo "sing-box=5566:sing-box=5566" > "$root/lib/apk/packages/sing-box-tiny.rusers"
+          echo "/etc/sing-box/" > "$root/lib/upgrade/keep.d/sing-box-tiny"
+          chmod 0644 "$root/lib/apk/packages/sing-box-tiny.rusers" \
+            "$root/lib/upgrade/keep.d/sing-box-tiny"
+
+          # The file list has to be written before the conffiles metadata,
+          # matching what OpenWrt's package-pack.mk does.
+          ( cd "$root" && find . -type f,l | sed 's|^\.|/|' | sort ) > "$work/sing-box-tiny.list"
+          mv "$work/sing-box-tiny.list" "$root/lib/apk/packages/sing-box-tiny.list"
+          chmod 0644 "$root/lib/apk/packages/sing-box-tiny.list"
+
+          printf '/etc/config/sing-box\n/etc/sing-box/\n' \
+            > "$root/lib/apk/packages/sing-box-tiny.conffiles"
+          echo "/etc/config/sing-box $(sha256sum "$root/etc/config/sing-box" | cut -d' ' -f1)" \
+            > "$root/lib/apk/packages/sing-box-tiny.conffiles_static"
+          chmod 0644 "$root/lib/apk/packages/sing-box-tiny.conffiles" \
+            "$root/lib/apk/packages/sing-box-tiny.conffiles_static"
+
+          mkdir -p "$work/scripts"
+          cat > "$work/scripts/post-install" <<'EOF'
+          #!/bin/sh
+          [ "${IPKG_NO_SCRIPT}" = "1" ] && exit 0
+          [ -s "${IPKG_INSTROOT}/lib/functions.sh" ] || exit 0
+          . ${IPKG_INSTROOT}/lib/functions.sh
+          export root="${IPKG_INSTROOT}"
+          export pkgname="sing-box-tiny"
+          add_group_and_user
+          default_postinst
+          EOF
+          { echo "#!/bin/sh"; echo "export PKG_UPGRADE=1"; tail -n +2 "$work/scripts/post-install"; } \
+            > "$work/scripts/post-upgrade"
+          cat > "$work/scripts/pre-deinstall" <<'EOF'
+          #!/bin/sh
+          [ -s "${IPKG_INSTROOT}/lib/functions.sh" ] || exit 0
+          . ${IPKG_INSTROOT}/lib/functions.sh
+          export root="${IPKG_INSTROOT}"
+          export pkgname="sing-box-tiny"
+          default_prerm
+          EOF
+          chmod 0755 "$work/scripts/"*
+
+          apk="$SDK_DIR/staging_dir/host/bin/apk"
+          out="$work/sing-box-tiny-$pkgver.apk"
+          # mkpkg takes file ownership from the filesystem, so it runs as root:
+          # uid 0 resolves to root:root without needing fakeroot in the image.
+          sudo "$apk" mkpkg \
+            --info "name:sing-box-tiny" \
+            --info "version:$pkgver" \
+            --info "description:Sing-box is a universal proxy platform which supports hysteria, SOCKS, Shadowsocks, ShadowTLS, Tor, trojan, VLess, VMess, WireGuard and so on." \
+            --info "arch:$PKG_ARCH" \
+            --info "license:GPL-3.0-or-later" \
+            --info "origin:feeds/packages/net/sing-box" \
+            --info "url:https://sing-box.sagernet.org" \
+            --info "maintainer:Van Waholtz <brvphoenix@gmail.com>" \
+            --info "provides:sing-box-tiny-any sing-box=$pkgver" \
+            --info "depends:ca-bundle kmod-inet-diag kmod-tun libc" \
+            --script "post-install:$work/scripts/post-install" \
+            --script "post-upgrade:$work/scripts/post-upgrade" \
+            --script "pre-deinstall:$work/scripts/pre-deinstall" \
+            --files "$root" \
+            --output "$out"
+          sudo chown "$(id -u):$(id -g)" "$out"
+          test -s "$out"
+
+          "$apk" adbdump "$out" | head -n 120 || true
+
+          cp "$out" "$GITHUB_WORKSPACE/"
           cd "$GITHUB_WORKSPACE"
-          sha256sum "$(basename "$apk")" > sha256sums
+          sha256sum "$(basename "$out")" > sha256sums
           cat sha256sums
 
       - name: Publish release
@@ -183,10 +287,15 @@ jobs:
           VERSION: ${{ steps.resolve.outputs.version }}
         run: |
           set -euo pipefail
-          gh release create "singbox-tiny-v$VERSION" \
-            "$GITHUB_WORKSPACE"/sing-box-tiny-*.apk "$GITHUB_WORKSPACE/sha256sums" \
-            --title "sing-box-tiny v$VERSION" \
-            --notes "Auto-built from SagerNet/sing-box v$VERSION with the OpenWrt ${OWRT_VERSION} SDK."
+          tag="singbox-tiny-v$VERSION"
+          assets=("$GITHUB_WORKSPACE"/sing-box-tiny-*.apk "$GITHUB_WORKSPACE/sha256sums")
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$tag" "${assets[@]}" --clobber
+          else
+            gh release create "$tag" "${assets[@]}" \
+              --title "sing-box-tiny v$VERSION" \
+              --notes "Auto-built from SagerNet/sing-box v$VERSION, cross-compiled with Go ${GO_VERSION} and packaged with the OpenWrt ${OWRT_VERSION} apk tool."
+          fi
 
       - name: Pin singbox.env
         id: pin
