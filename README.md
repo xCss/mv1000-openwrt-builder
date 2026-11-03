@@ -38,7 +38,7 @@ MV1000 是双核 A53 1GHz / 1GB RAM，代理吞吐大约 100–300 Mbps（协议
 - 基于 `openwrt-imagebuilder-25.12.6-mvebu-cortexa53`，profile `glinet_gl-mv1000`（内核 6.12.112）。
 - 内置 `luci` + 中文语言包 + 包管理器；Nikki 及其内核 `mihomo-meta` 直接打进 rootfs。
 - `files/etc/uci-defaults/99-bypass-router` 首次启动写入：LAN 静态 `192.168.1.2`、网关/DNS 指向 `.4`、关闭 DHCP/DHCPv6/RA、删除 WAN、LAN 区开启 masquerade + MSS clamping、时区 `Asia/Shanghai`。
-- `files/etc/uci-defaults/99-data-partition` 首次启动检查 eMMC 尾部空闲空间（≥512MB 时），自动建 p3、格式化成 ext4（label `data`）、挂载到 `/mnt/data` 并写入 fstab；后续开机由 `block-mount` 自动挂载。首次启动会多花几十秒格式化。
+- `files/etc/uci-defaults/99-data-partition` 首次启动检查 eMMC 尾部空闲空间（≥512MB 时），自动建 p3、格式化成 ext4（label `data`）、挂载到 `/mnt/data` 并写入 fstab；后续开机由 `block-mount` 自动挂载。首次启动会多花几十秒格式化。注意：`parted` 会重写 MBR 磁盘签名，而内核命令行的 `root=PARTUUID=...` 依赖它，脚本会在建分区后把备份的签名写回，否则下次启动会因找不到根分区而 panic。
 - 因为 Nikki 的 apk 未签名（其官方安装脚本也用 `--allow-untrusted`），构建时关闭了 Image Builder 的签名校验；官方包仍从 `downloads.openwrt.org` 走 HTTPS 拉取。
 - 用的是 **ext4** 系统镜像：根分区直接可写，没有 overlay；根分区在构建时按 `rootfs_mb` 固定，运行时不做在线扩容（builder 用 `make_ext4fs` 生成的 ext4 不支持加组），eMMC 剩余空间由首启脚本建成 `/mnt/data`。代价是没有 `firstboot` 恢复出厂，重装只能 U-Boot 重刷或提前导出配置。
 - 选 `openclash` 时会预置 `mihomo` 内核到 `/etc/openclash/core/clash_meta`，避免首启时联网下载。
