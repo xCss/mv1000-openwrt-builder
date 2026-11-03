@@ -148,7 +148,15 @@ jobs:
           ./scripts/feeds install -a -p packages
           echo "CONFIG_PACKAGE_sing-box-tiny=y" >> .config
           echo "CONFIG_PACKAGE_sing-box=n" >> .config
+          # The SDK defaults to building every kernel module. Only the
+          # sing-box-tiny apk is wanted here, so drop the other ~900 kmods
+          # that otherwise dominate the build time.
+          echo "CONFIG_ALL_KMODS=n" >> .config
           make defconfig
+          if grep -qx 'CONFIG_ALL_KMODS=y' .config; then
+            echo "::error::CONFIG_ALL_KMODS is still enabled; refusing the slow build"
+            exit 1
+          fi
           make package/sing-box/compile BUILD_VARIANT=tiny -j"$(nproc)" V=s
 
           apk=$(find bin/packages -name 'sing-box-tiny-*.apk' | head -n1)
