@@ -29,7 +29,7 @@ MV1000 是双核 A53 1GHz / 1GB RAM，代理吞吐大约 100–300 Mbps（协议
 把本目录推到自己的 GitHub 仓库（公开/私有均可），默认分支 `main`。Actions 里运行 **Build MV1000 firmware**：
 
 - `plugin`：`nikki`（默认）/ `openclash` / `none`
-- `rootfs_mb`：默认 `512`。镜像会按这个大小生成 ext4 根分区，省去刷机后手动扩容。**如果 U-Boot 上传大文件失败，改 256 重跑；只有在确实需要更多空间时才用 1024。**
+- `rootfs_mb`：默认 `256`。镜像会按这个大小生成 ext4 根分区，省去刷机后手动扩容。**如果 U-Boot 上传大文件失败，可改 192 甚至 160 重跑；只有在确实需要更多空间时才用 512/1024。**
 
 产物：`openwrt-25.12.6-mvebu-cortexa53-glinet_gl-mv1000-mv1000-<plugin>-ext4-sdcard.img.gz`。打 tag 推送时会自动发 Release。
 
@@ -53,7 +53,7 @@ MV1000 是双核 A53 1GHz / 1GB RAM，代理吞吐大约 100–300 Mbps（协议
 1. 下载 artifact，**解压成 `.img`**（Windows 用 7-Zip，或 `tar -xzf xxx.img.gz`）。不要上传 `.gz`，也不要上传 `initramfs-kernel.bin`。
 2. 电脑网卡设静态 `192.168.1.2 / 255.255.255.0`，用网线接 MV1000 的 **LAN 口**，WAN 口不接，先断开其他 `192.168.1.x` 网络。
 3. 按住 Reset（↻）不放，插 USB 电源；等 Power 与 WAN 灯常亮后松开。
-4. 浏览器打开 `http://192.168.1.1`（不要 https），选 `.img` 上传。页面会卡住是正常的，等 3–10 分钟（512 MB 镜像会更久），设备自动重启。
+4. 浏览器打开 `http://192.168.1.1`（不要 https），选 `.img` 上传。页面会卡住是正常的，等 3–10 分钟（256 MB 镜像约 5 分钟），设备自动重启。
 5. 电脑网卡改回自动获取，访问 `http://192.168.1.2`，SSH `root@192.168.1.2`（无密码，先 `passwd` 设密码）。
 6. 确认 `df -h /` 显示根分区约等于 `rootfs_mb`。
 

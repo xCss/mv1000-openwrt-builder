@@ -34,7 +34,7 @@ env:
   TARGET_NAME: "mvebu-cortexa53"
   PROFILE: "glinet_gl-mv1000"
   PLUGIN: ${{ inputs.plugin || 'nikki' }}
-  ROOTFS_MB: ${{ inputs.rootfs_mb || '512' }}
+  ROOTFS_MB: ${{ inputs.rootfs_mb || '256' }}
   NIKKI_FEED: "https://nikkinikki.pages.dev/openwrt-25.12/aarch64_cortex-a53/nikki"
 
 jobs:
