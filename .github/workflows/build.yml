@@ -54,6 +54,16 @@ jobs:
           sudo apt-get install -y zstd build-essential libncurses-dev zlib1g-dev \
             libssl-dev rsync unzip file
 
+      # Keyed on the build inputs only, so changes under files/ reuse the
+      # previously compiled apk instead of rebuilding it every push.
+      - name: Cache built sing-box apk
+        if: env.PLUGIN == 'singbox'
+        id: singbox-cache
+        uses: actions/cache@v6
+        with:
+          path: ${{ github.workspace }}/singbox-apk
+          key: singbox-${{ env.OWRT_VERSION }}-${{ env.SINGBOX_VERSION }}-${{ env.SINGBOX_HASH }}-v1
+
       - name: Download and verify Image Builder
         run: |
           set -euo pipefail
@@ -65,7 +75,7 @@ jobs:
           tar --zstd -xf "$IB"
 
       - name: Download and verify OpenWrt SDK
-        if: env.PLUGIN == 'singbox'
+        if: env.PLUGIN == 'singbox' && steps.singbox-cache.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           SDK="openwrt-sdk-${OWRT_VERSION}-${TARGET_NAME}_gcc-14.3.0_musl.Linux-x86_64.tar.zst"
@@ -90,7 +100,7 @@ jobs:
           chmod +x "$GITHUB_WORKSPACE"/files/etc/uci-defaults/*
 
       - name: Build sing-box-tiny apk
-        if: env.PLUGIN == 'singbox'
+        if: env.PLUGIN == 'singbox' && steps.singbox-cache.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           cd "$SDK_DIR"
@@ -114,7 +124,14 @@ jobs:
           find bin/packages -name 'sing-box*.apk' -print
           apk=$(find bin/packages -name 'sing-box-tiny-*.apk' | head -n1)
           test -n "$apk"
-          cp "$apk" "$IB_DIR/packages/"
+          mkdir -p "$GITHUB_WORKSPACE/singbox-apk"
+          cp "$apk" "$GITHUB_WORKSPACE/singbox-apk/"
+
+      - name: Stage sing-box apk
+        if: env.PLUGIN == 'singbox'
+        run: |
+          set -euo pipefail
+          cp "$GITHUB_WORKSPACE"/singbox-apk/sing-box-tiny-*.apk "$IB_DIR/packages/"
           ls -lh "$IB_DIR/packages/"
 
       - name: Fetch theme and plugin packages
