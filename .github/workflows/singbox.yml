@@ -4,6 +4,12 @@ on:
   schedule:
     - cron: "17 3 * * *"
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Build a specific version without pinning (e.g. 1.15.0-alpha.13)"
+        type: string
+        required: false
+        default: ""
   push:
     branches: [main]
     paths:
@@ -37,15 +43,26 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          pin=$(sed -n 's/^SINGBOX_PIN=//p' singbox.env 2>/dev/null | head -n1)
-          if [ "$pin" = "1" ]; then
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "singbox.env is pinned manually; skipping auto-update"
-            exit 0
-          fi
           echo "skip=false" >> "$GITHUB_OUTPUT"
 
-          version=$(gh api repos/SagerNet/sing-box/releases/latest --jq '.tag_name' | sed 's/^v//')
+          input_version='${{ inputs.version }}'
+          if [ -n "$input_version" ]; then
+            case "$input_version" in
+              *[!0-9A-Za-z.-]*) echo "::error::invalid version: $input_version"; exit 1 ;;
+            esac
+            version="${input_version#v}"
+            echo "manual=true" >> "$GITHUB_OUTPUT"
+            echo "building requested version v$version"
+          else
+            pin=$(sed -n 's/^SINGBOX_PIN=//p' singbox.env 2>/dev/null | head -n1)
+            if [ "$pin" = "1" ]; then
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              echo "singbox.env is pinned manually; skipping auto-update"
+              exit 0
+            fi
+            echo "manual=false" >> "$GITHUB_OUTPUT"
+            version=$(gh api repos/SagerNet/sing-box/releases/latest --jq '.tag_name' | sed 's/^v//')
+          fi
           test -n "$version"
           tag="singbox-tiny-v$version"
 
@@ -136,7 +153,7 @@ jobs:
 
       - name: Pin singbox.env
         id: pin
-        if: steps.resolve.outputs.skip != 'true'
+        if: steps.resolve.outputs.skip != 'true' && steps.resolve.outputs.manual != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.resolve.outputs.version }}
