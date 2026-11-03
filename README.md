@@ -16,7 +16,7 @@ XDR5480 继续做拨号主路由，MV1000 只做旁路由代理。本仓库用 G
 
 | 方案 | 版本 | 25.12 apk | 依赖 | 适用性 |
 | --- | --- | --- | --- | --- |
-| **sing-box（tiny）** | v1.14.4（CI 用 SDK 自编译） | ✅ `aarch64_cortex-a53` | 官方源：kmod-tun、kmod-inet-diag、ca-bundle | **推荐**。tiny 变体固定带 `gvisor/quic/utls/clash_api`，apk 约 11MB（mihomo-meta 是 20.6MB）；官方 feed 只到 1.13.21，CI 里升到上游最新版，顺带换掉旧 Go 标准库。没有 LuCI 应用，靠 JSON 配置 + Clash API 面板 |
+| **sing-box（tiny）** | v1.14.4（CI 用 SDK 自编译） | ✅ `aarch64_cortex-a53` | 官方源：kmod-tun、kmod-inet-diag、ca-bundle | **推荐**。tiny 变体固定带 `gvisor/quic/utls/clash_api`，apk 约 14MB（mihomo-meta 是 20.6MB）；官方 feed 只到 1.13.21，CI 里升到上游最新版，顺带换掉旧 Go 标准库。没有 LuCI 应用，靠 JSON 配置 + Clash API 面板 |
 | OpenClash | v0.48.002 | ✅ `luci-app-openclash-0.48.002.apk` | dnsmasq-full、bash、ruby、ruby-yaml、kmod-tun、unzip、ip-full | 功能最全但重；内核默认首次启动才从 GitHub 下载（国内常失败）；会替换 dnsmasq 为 dnsmasq-full |
 | PassWall | 26.10.29-1 | ✅ 提供 apk | 还需要 chinadns-ng、dns2socks、microsocks、tcping、lyaml、luci-compat 等，来自其自有 feed | 非 Clash 方案；出包要多挂一个 feed，折腾成本高 |
 
