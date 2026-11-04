@@ -89,15 +89,34 @@ jobs:
           sudo apt-get install -y zstd build-essential libncurses-dev zlib1g-dev \
             libssl-dev rsync unzip file
 
+      - name: Restore Image Builder tarball
+        uses: actions/cache@v4
+        with:
+          path: .cache/ib
+          key: ib-${{ env.OWRT_VERSION }}-${{ env.TARGET_NAME }}-v1
+
       - name: Download and verify Image Builder
         run: |
           set -euo pipefail
           IB="openwrt-imagebuilder-${OWRT_VERSION}-${TARGET_NAME}.Linux-x86_64.tar.zst"
           BASE="https://downloads.openwrt.org/releases/${OWRT_VERSION}/targets/${TARGET_PATH}"
-          curl -fsSL -o "$IB" "$BASE/$IB"
+          mkdir -p .cache/ib
           curl -fsSL -o sha256sums "$BASE/sha256sums"
-          grep -F "$IB" sha256sums | sha256sum -c -
-          tar --zstd -xf "$IB"
+
+          fetch_ib() {
+            curl -fsSL -o ".cache/ib/$IB" "$BASE/$IB"
+          }
+          verify_ib() {
+            ( cd .cache/ib && grep -F "$IB" ../../sha256sums | sha256sum -c - )
+          }
+
+          [ -f ".cache/ib/$IB" ] || fetch_ib
+          if ! verify_ib; then
+            echo "::warning::cached Image Builder failed checksum, downloading again"
+            fetch_ib
+            verify_ib
+          fi
+          tar --zstd -xf ".cache/ib/$IB"
 
       - name: Prepare Image Builder
         run: |
