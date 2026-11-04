@@ -198,6 +198,7 @@ jobs:
           )
           chmod 0755 "$root/usr/bin/sing-box"
           file "$root/usr/bin/sing-box"
+          cp "$root/usr/bin/sing-box" "$GITHUB_WORKSPACE/sing-box-$VERSION-linux-arm64"
 
           curl -fsSL -o "$root/etc/sing-box/config.json" \
             "https://raw.githubusercontent.com/SagerNet/sing-box/v$VERSION/release/config/config.json"
@@ -281,6 +282,7 @@ jobs:
           cp "$out" "$GITHUB_WORKSPACE/"
           cd "$GITHUB_WORKSPACE"
           sha256sum "$(basename "$out")" > sha256sums
+          sha256sum "sing-box-$VERSION-linux-arm64" >> sha256sums
           cat sha256sums
 
       - name: Publish release
@@ -291,7 +293,7 @@ jobs:
         run: |
           set -euo pipefail
           tag="singbox-tiny-v$VERSION"
-          assets=("$GITHUB_WORKSPACE"/sing-box-tiny-*.apk "$GITHUB_WORKSPACE/sha256sums")
+          assets=("$GITHUB_WORKSPACE"/sing-box-tiny-*.apk "$GITHUB_WORKSPACE/sing-box-$VERSION-linux-arm64" "$GITHUB_WORKSPACE/sha256sums")
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$tag" "${assets[@]}" --clobber
           else
