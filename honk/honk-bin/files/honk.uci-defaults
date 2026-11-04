@@ -1,0 +1,10 @@
+#!/bin/sh
+# The image build enables every init script. honk is an early-alpha engine
+# that takes over LAN traffic once started, so a fresh image keeps it off
+# until the config has nodes and rules and the user enables it.
+
+[ -n "$IPKG_INSTROOT" ] && exit 0
+
+/etc/init.d/honk disable
+
+exit 0

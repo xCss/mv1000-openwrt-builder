@@ -1,0 +1,56 @@
+# Minimal honk configuration. Routing falls back to direct so that enabling
+# the service cannot break connectivity before a proxy is added.
+#
+# UI: http://192.168.1.2:9527/ (native API, embedded doona). The first visit
+# creates the administrator account. Clash-compatible API: 127.0.0.1:9090,
+# reachable through an SSH tunnel.
+
+global {
+    wan_interface: auto
+    lan_interface: br-lan
+    log_level: info
+    dial_mode: domain++
+    auto_config_kernel_parameter: true
+    data_dir: '/etc/honk/data'
+    log_file: ''
+    tcp_check_url: 'https://www.gstatic.com/generate_204'
+    tcp_check_http_method: HEAD
+    check_interval: 300s
+    bootstrap_resolver: '1.1.1.1:53'
+    nfqueue_enable: true
+}
+
+dns {
+    upstream {
+        local: 'udp://127.0.0.1:53'
+    }
+    routing {
+        request {
+            fallback: local
+        }
+        response {
+            fallback: local
+        }
+    }
+}
+
+routing {
+    fallback: direct
+}
+
+experimental {
+    clash_api {
+        external_controller: '127.0.0.1:9090'
+        default_mode: 'Rule'
+    }
+    native_api {
+        enabled: true
+        listen: '0.0.0.0:9527'
+        password_auth: true
+        config_write: true
+        ui: 'embedded'
+    }
+    cache_file {
+        enabled: true
+    }
+}

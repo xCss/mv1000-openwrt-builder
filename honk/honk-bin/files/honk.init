@@ -1,0 +1,64 @@
+#!/bin/sh /etc/rc.common
+# honk runs as root: it creates the dae0 link pair and the daens namespace,
+# attaches TC and cgroup programs and uses NFQUEUE.
+
+USE_PROCD=1
+START=99
+STOP=01
+
+start_service() {
+	config_load honk
+
+	local config_file
+	config_get config_file config config_file /etc/honk/config.dae
+
+	# honk computes CO-RE relocations against the kernel BTF; this image
+	# builds it into the kernel, so /sys/kernel/btf/vmlinux must exist.
+	if [ ! -e /sys/kernel/btf/vmlinux ]; then
+		logger -t honk "kernel BTF is missing; honk cannot start"
+		return 1
+	fi
+
+	if [ ! -r "$config_file" ]; then
+		logger -t honk "configuration file '$config_file' is unreadable"
+		return 1
+	fi
+
+	grep -qs ' /sys/fs/bpf bpf ' /proc/mounts ||
+		mount -t bpf bpf /sys/fs/bpf 2>/dev/null
+	if ! grep -qs ' /sys/fs/bpf bpf ' /proc/mounts; then
+		logger -t honk "cannot mount bpffs at /sys/fs/bpf"
+		return 1
+	fi
+
+	# The datapath attaches sock_ops to the root cgroup, so cgroup v2 has to
+	# be mounted before honk starts.
+	if ! grep -qs ' /sys/fs/cgroup cgroup2 ' /proc/mounts; then
+		mkdir -p /sys/fs/cgroup
+		mount -t cgroup2 none /sys/fs/cgroup 2>/dev/null
+	fi
+
+	# honk reads memory.current of its procd cgroup once at startup; procd
+	# enables no controller there, so enable memory down to the service.
+	if grep -qsw memory /sys/fs/cgroup/cgroup.controllers; then
+		local cg
+		mkdir -p /sys/fs/cgroup/services/honk
+		for cg in /sys/fs/cgroup /sys/fs/cgroup/services /sys/fs/cgroup/services/honk; do
+			echo +memory > "$cg/cgroup.subtree_control" 2>/dev/null
+		done
+	fi
+
+	mkdir -p /etc/honk/data /usr/share/honk
+	[ -e /usr/share/honk/geoip.dat ] ||
+		ln -sf ../v2ray/geoip.dat /usr/share/honk/geoip.dat
+	[ -e /usr/share/honk/geosite.dat ] ||
+		ln -sf ../v2ray/geosite.dat /usr/share/honk/geosite.dat
+
+	procd_open_instance honk
+	procd_set_param command /usr/bin/honk-core --config "$config_file"
+	procd_set_param limits core="unlimited" nofile="1048576 1048576"
+	procd_set_param respawn
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	procd_close_instance
+}

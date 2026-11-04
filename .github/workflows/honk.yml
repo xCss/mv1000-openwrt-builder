@@ -3,7 +3,7 @@ name: Build MV1000 honk firmware
 # Full OpenWrt source build: the official kernel has neither cgroups nor BTF,
 # and honk refuses to start without CONFIG_CGROUP_BPF. honk itself is not
 # compiled here; the upstream static aarch64 archive is installed by the
-# honk-bin package under openwrt/honk-bin.
+# honk-bin package under honk/honk-bin.
 on:
   workflow_dispatch:
     inputs:
@@ -58,7 +58,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: openwrt/.ccache
-          key: honk-ccache-${{ env.OWRT_VERSION }}-${{ hashFiles('openwrt/kernel/mvebu-cortexa53.config-6.12') }}
+          key: honk-ccache-${{ env.OWRT_VERSION }}-${{ hashFiles('honk/kernel/mvebu-cortexa53.config-6.12') }}
           restore-keys: |
             honk-ccache-${{ env.OWRT_VERSION }}-
 
@@ -77,11 +77,11 @@ jobs:
         run: |
           set -euo pipefail
           cd openwrt
-          cat "$GITHUB_WORKSPACE/openwrt/kernel/mvebu-cortexa53.config-6.12" \
+          cat "$GITHUB_WORKSPACE/honk/kernel/mvebu-cortexa53.config-6.12" \
             >> target/linux/mvebu/cortexa53/config-6.12
 
           mkdir -p package/honk-bin
-          cp -a "$GITHUB_WORKSPACE/openwrt/honk-bin/." package/honk-bin/
+          cp -a "$GITHUB_WORKSPACE/honk/honk-bin/." package/honk-bin/
           cp -a "$GITHUB_WORKSPACE/files/." package/base-files/files/
           find package/base-files/files/etc/uci-defaults -type f \
             -exec chmod 0755 {} +

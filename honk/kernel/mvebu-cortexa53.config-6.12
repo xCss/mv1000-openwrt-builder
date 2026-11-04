@@ -1,0 +1,10 @@
+# Extra kernel options for the honk experiment on mvebu/cortexa53 (MV1000).
+# Official OpenWrt 25.12 disables cgroups and BTF; honk needs both at startup.
+CONFIG_CGROUPS=y
+CONFIG_CGROUP_BPF=y
+CONFIG_NET_CLS_ACT=y
+CONFIG_DEBUG_INFO_BTF=y
+
+# Only for the native-api UDP receive-trace fallback; honk degrades without it.
+CONFIG_FUNCTION_TRACER=y
+CONFIG_DYNAMIC_FTRACE=y
