@@ -1,0 +1,12 @@
+#!/bin/sh
+# Make Vantage the default LuCI theme. The theme package does not change
+# luci.main.mediaurlbase on its own.
+
+[ -d /www/luci-static/vantage ] || exit 0
+
+uci -q set luci.main.mediaurlbase='/luci-static/vantage'
+set -- /usr/share/luci/menu.d/*vantage*.json
+[ -e "$1" ] && uci -q set luci.main.landingpage='admin/dashboard'
+uci -q commit luci
+
+exit 0

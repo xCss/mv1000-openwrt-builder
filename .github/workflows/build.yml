@@ -36,8 +36,7 @@ env:
   PROFILE: "glinet_gl-mv1000"
   PLUGIN: ${{ inputs.plugin || 'singbox' }}
   ROOTFS_MB: ${{ inputs.rootfs_mb || '256' }}
-  ARGON_VERSION: "3.1.2"
-  ARGON_HASH: "3fdbd812dafd521926891863a372aba78ab83ec24add47bdda910fb1f6b1be40"
+  VANTAGE_VERSION: "1.0.14"
 
 jobs:
   # A pushed change can land before the sing-box workflow has published the
@@ -123,8 +122,8 @@ jobs:
           set -euo pipefail
           cd "openwrt-imagebuilder-${OWRT_VERSION}-${TARGET_NAME}.Linux-x86_64"
           echo "IB_DIR=$PWD" >> "$GITHUB_ENV"
-          # Third-party apk packages (argon, sing-box-tiny) are not signed with
-          # a key known to the build, so signature verification has to be off.
+          # Third-party apk packages (Vantage, sing-box-tiny) are not signed
+          # with a key known to the build, so signature verification has to be off.
           # Official feeds are still fetched over HTTPS from
           # downloads.openwrt.org.
           sed -i 's/^CONFIG_SIGNATURE_CHECK=.*/# CONFIG_SIGNATURE_CHECK is not set/' .config
@@ -149,11 +148,22 @@ jobs:
           set -euo pipefail
           pkgs="luci luci-i18n-base-zh-cn luci-i18n-firewall-zh-cn luci-app-package-manager luci-i18n-package-manager-zh-cn curl ca-bundle parted block-mount e2fsprogs wget-ssl"
 
-          argon="luci-theme-argon-${ARGON_VERSION}-r1.apk"
-          curl -fsSL -o "$IB_DIR/packages/$argon" \
-            "https://github.com/jerrykuku/luci-theme-argon/releases/download/v${ARGON_VERSION}/$argon"
-          echo "$ARGON_HASH  $IB_DIR/packages/$argon" | sha256sum -c -
-          pkgs="$pkgs luci-theme-argon"
+          for pkg in luci-theme-vantage luci-app-vantage \
+              luci-i18n-vantage-zh-cn luci-i18n-vantage-theme-zh-cn; do
+            file="${pkg}-${VANTAGE_VERSION}-r1.apk"
+            curl -fsSL -o "$IB_DIR/packages/$file" \
+              "https://github.com/anothaDev/luci-theme-vantage/releases/download/v${VANTAGE_VERSION}/$file"
+          done
+          cat > "$RUNNER_TEMP/vantage.sha256" <<'EOF'
+          b27c1743b428aee87c9a50f493e88641bbeaf02ac3568b12f6709a2a6ef88ce5  luci-theme-vantage-1.0.14-r1.apk
+          ecee6cb5099f091c93dd1e8dc5d2b795c3a11c86b9eb8ae695a3812d2ab9f1db  luci-app-vantage-1.0.14-r1.apk
+          a1bbe0426dea5220fea489e1d96c15d8a9152703fedb21cb088cf7b7d2461447  luci-i18n-vantage-theme-zh-cn-1.0.14-r1.apk
+          e383a8bbf202315f5acbc9cf1221fc0ad726a024afcbeda08b2aa86642d5c2a7  luci-i18n-vantage-zh-cn-1.0.14-r1.apk
+          EOF
+          ( cd "$IB_DIR/packages" && sha256sum -c "$RUNNER_TEMP/vantage.sha256" )
+          pkgs="$pkgs luci-theme-vantage luci-app-vantage \
+            luci-i18n-vantage-zh-cn luci-i18n-vantage-theme-zh-cn \
+            ucode-mod-rtnl rpcd-mod-iwinfo rpcd-mod-ucode"
 
           case "$PLUGIN" in
             singbox)
