@@ -16,8 +16,7 @@ set network.lan.ipv6='0'
 delete network.lan.ip6assign
 delete network.lan.ip6hint
 delete network.lan.dns
-add_list network.lan.dns='223.5.5.5'
-add_list network.lan.dns='119.29.29.29'
+add_list network.lan.dns='192.168.1.4'
 
 delete network.wan
 delete network.wan6
