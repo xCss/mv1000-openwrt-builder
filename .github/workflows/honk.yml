@@ -27,7 +27,7 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 350
 
     steps:
@@ -69,9 +69,9 @@ jobs:
             openwrt/staging_dir/toolchain-*
             openwrt/build_dir/host
             openwrt/build_dir/toolchain-*
-          key: honk-build-${{ env.OWRT_VERSION }}-${{ hashFiles('honk/kernel/mvebu-cortexa53.config-6.12', 'honk/honk-bin/Makefile', '.github/workflows/honk.yml') }}
+          key: honk-build-v2-ubuntu24-${{ runner.arch }}-${{ env.OWRT_VERSION }}-cortexa53-${{ hashFiles('honk/kernel/mvebu-cortexa53.config-6.12', 'honk/honk-bin/Makefile', '.github/workflows/honk.yml') }}
           restore-keys: |
-            honk-build-${{ env.OWRT_VERSION }}-
+            honk-build-v2-ubuntu24-${{ runner.arch }}-${{ env.OWRT_VERSION }}-cortexa53-
 
       - name: Install required feeds
         run: |
@@ -109,15 +109,16 @@ jobs:
           cat > .config <<EOF
           CONFIG_TARGET_mvebu=y
           CONFIG_TARGET_mvebu_cortexa53=y
-          CONFIG_TARGET_DEVICE_mvebu_cortexa53_DEVICE_glinet_gl-mv1000=y
+          CONFIG_TARGET_mvebu_cortexa53_DEVICE_glinet_gl-mv1000=y
+          CONFIG_DEVEL=y
           CONFIG_CCACHE=y
-          EOF
-          make defconfig
-
-          cat >> .config <<EOF
-          CONFIG_TARGET_KERNEL_PARTSIZE=16
+          CONFIG_BUILD_LOG=y
+          CONFIG_TARGET_KERNEL_PARTSIZE=32
           CONFIG_TARGET_ROOTFS_PARTSIZE=${ROOTFS_MB}
           CONFIG_TARGET_ROOTFS_EXT4FS=y
+          # CONFIG_TARGET_ROOTFS_INITRAMFS is not set
+          # CONFIG_TARGET_ROOTFS_SQUASHFS is not set
+          # CONFIG_TARGET_ROOTFS_TARGZ is not set
           CONFIG_KERNEL_CGROUPS=y
           CONFIG_KERNEL_CGROUP_BPF=y
           CONFIG_KERNEL_NAMESPACES=y
@@ -159,7 +160,9 @@ jobs:
           EOF
           make defconfig
 
-          for symbol in CONFIG_PACKAGE_honk-bin CONFIG_PACKAGE_luci-theme-vantage \
+          for symbol in CONFIG_TARGET_mvebu_cortexa53_DEVICE_glinet_gl-mv1000 \
+              CONFIG_DEVEL CONFIG_CCACHE CONFIG_BUILD_LOG CONFIG_TARGET_ROOTFS_EXT4FS \
+              CONFIG_PACKAGE_honk-bin CONFIG_PACKAGE_luci-theme-vantage \
               CONFIG_PACKAGE_luci-app-vantage CONFIG_PACKAGE_kmod-sched-bpf \
               CONFIG_KERNEL_CGROUPS CONFIG_KERNEL_CGROUP_BPF \
               CONFIG_KERNEL_NAMESPACES CONFIG_KERNEL_NET_NS \
@@ -171,10 +174,43 @@ jobs:
               exit 1
             }
           done
+          grep -qx "CONFIG_TARGET_PROFILE=\"DEVICE_${PROFILE}\"" .config || {
+            echo "::error::the selected target profile is not ${PROFILE}"
+            grep '^CONFIG_TARGET_PROFILE=' .config || true
+            exit 1
+          }
+          for symbol in CONFIG_TARGET_ROOTFS_INITRAMFS CONFIG_TARGET_ROOTFS_SQUASHFS \
+              CONFIG_TARGET_ROOTFS_TARGZ; do
+            grep -qx "# ${symbol} is not set" .config || {
+              echo "::error::unexpected extra image format: ${symbol}"
+              exit 1
+            }
+          done
           grep -qx '# CONFIG_KERNEL_DEBUG_INFO_REDUCED is not set' .config || {
             echo "::error::reduced debug information is incompatible with BTF"
             exit 1
           }
+
+      - name: Prepare host tools and toolchain
+        id: toolchain
+        run: |
+          set -euo pipefail
+          cd openwrt
+          make -j"$(nproc)" tools/install toolchain/install 2>&1 \
+            | tee "$RUNNER_TEMP/honk-toolchain.log"
+
+      - name: Save host tools and toolchain
+        if: steps.toolchain.outcome == 'success' && steps.build-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            openwrt/dl
+            openwrt/.ccache
+            openwrt/staging_dir/host
+            openwrt/staging_dir/toolchain-*
+            openwrt/build_dir/host
+            openwrt/build_dir/toolchain-*
+          key: ${{ steps.build-cache.outputs.cache-primary-key }}
 
       - name: Build
         id: compile
@@ -182,11 +218,12 @@ jobs:
           set -euo pipefail
           cd openwrt
           # The default target is world: download, compile and assemble images.
-          make -j"$(nproc)"
+          make -j"$(nproc)" 2>&1 | tee "$RUNNER_TEMP/honk-build.log"
 
-          img=$(find bin/targets/"$TARGET_PATH" -name '*sdcard.img.gz' -print -quit)
-          test -n "$img" || {
-            echo "::error::world did not produce a sdcard image"
+          mapfile -t images < <(find bin/targets/"$TARGET_PATH" -maxdepth 1 \
+            -type f -name "*-${PROFILE}-ext4-sdcard.img.gz")
+          test "${#images[@]}" -eq 1 || {
+            echo "::error::expected exactly one MV1000 ext4 sdcard image"
             ls -lhR bin/targets/"$TARGET_PATH"/ || true
             exit 1
           }
@@ -231,18 +268,13 @@ jobs:
           test -d "$(find build_dir -type d -path '*/root-*/www/luci-static/vantage' -print -quit)"
           ls -lh bin/targets/mvebu/cortexa53/
 
-      - name: Save build caches
-        if: always() && steps.compile.outcome == 'success' && steps.build-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            openwrt/dl
-            openwrt/.ccache
-            openwrt/staging_dir/host
-            openwrt/staging_dir/toolchain-*
-            openwrt/build_dir/host
-            openwrt/build_dir/toolchain-*
-          key: ${{ steps.build-cache.outputs.cache-primary-key }}
+      - name: Report build failure
+        if: failure()
+        run: |
+          df -h /
+          free -h
+          find openwrt/logs/target/linux -type f -name '*.txt' -print \
+            -exec tail -n 100 {} \; 2>/dev/null || true
 
       - name: Upload build configuration
         if: always()
@@ -252,7 +284,10 @@ jobs:
           path: |
             openwrt/.config
             openwrt/build_dir/target-*/linux-mvebu_cortexa53/linux-*/.config
+            openwrt/logs/target/linux/
             ${{ runner.temp }}/honk-vmlinux-sections.txt
+            ${{ runner.temp }}/honk-toolchain.log
+            ${{ runner.temp }}/honk-build.log
           include-hidden-files: true
           if-no-files-found: warn
 
@@ -261,7 +296,7 @@ jobs:
         with:
           name: openwrt-${{ env.OWRT_VERSION }}-mv1000-honk
           path: |
-            openwrt/bin/targets/mvebu/cortexa53/*sdcard.img.gz
+            openwrt/bin/targets/mvebu/cortexa53/*glinet_gl-mv1000-ext4-sdcard.img.gz
             openwrt/bin/targets/mvebu/cortexa53/sha256sums
           if-no-files-found: error
 
@@ -271,5 +306,5 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release create "$GITHUB_REF_NAME" \
-            openwrt/bin/targets/mvebu/cortexa53/*sdcard.img.gz \
+            openwrt/bin/targets/mvebu/cortexa53/*glinet_gl-mv1000-ext4-sdcard.img.gz \
             --title "$GITHUB_REF_NAME" --generate-notes
