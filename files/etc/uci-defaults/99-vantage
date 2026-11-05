@@ -5,6 +5,7 @@
 [ -d /www/luci-static/vantage ] || exit 0
 
 uci -q set luci.main.mediaurlbase='/luci-static/vantage'
+[ -s /usr/lib/lua/luci/i18n/base.zh-cn.lmo ] && uci -q set luci.main.lang='zh_cn'
 set -- /usr/share/luci/menu.d/*vantage*.json
 [ -e "$1" ] && uci -q set luci.main.landingpage='admin/dashboard'
 uci -q commit luci

@@ -130,6 +130,7 @@ jobs:
           CONFIG_KERNEL_FUNCTION_TRACER=y
           CONFIG_KERNEL_DYNAMIC_FTRACE=y
           CONFIG_PACKAGE_luci=y
+          CONFIG_LUCI_LANG_zh_Hans=y
           CONFIG_PACKAGE_luci-i18n-base-zh-cn=y
           CONFIG_PACKAGE_luci-i18n-firewall-zh-cn=y
           CONFIG_PACKAGE_luci-app-package-manager=y
@@ -162,6 +163,12 @@ jobs:
 
           for symbol in CONFIG_TARGET_mvebu_cortexa53_DEVICE_glinet_gl-mv1000 \
               CONFIG_DEVEL CONFIG_CCACHE CONFIG_BUILD_LOG CONFIG_TARGET_ROOTFS_EXT4FS \
+              CONFIG_LUCI_LANG_zh_Hans \
+              CONFIG_PACKAGE_luci-i18n-base-zh-cn \
+              CONFIG_PACKAGE_luci-i18n-firewall-zh-cn \
+              CONFIG_PACKAGE_luci-i18n-package-manager-zh-cn \
+              CONFIG_PACKAGE_luci-i18n-vantage-zh-cn \
+              CONFIG_PACKAGE_luci-i18n-vantage-theme-zh-cn \
               CONFIG_PACKAGE_honk-bin CONFIG_PACKAGE_luci-theme-vantage \
               CONFIG_PACKAGE_luci-app-vantage CONFIG_PACKAGE_kmod-sched-bpf \
               CONFIG_KERNEL_CGROUPS CONFIG_KERNEL_CGROUP_BPF \
@@ -266,6 +273,13 @@ jobs:
           }
           test -x "$(find build_dir -type f -name honk-core -print -quit)"
           test -d "$(find build_dir -type d -path '*/root-*/www/luci-static/vantage' -print -quit)"
+          for catalog in base firewall package-manager vantage vantage-theme; do
+            test -s "$(find build_dir -type f \
+              -path "*/root-mvebu/usr/lib/lua/luci/i18n/${catalog}.zh-cn.lmo" -print -quit)" || {
+              echo "::error::missing Simplified Chinese translation: ${catalog}"
+              exit 1
+            }
+          done
           ls -lh bin/targets/mvebu/cortexa53/
 
       - name: Report build failure
