@@ -88,7 +88,7 @@ MV1000 是双核 A53 1GHz / 1GB RAM，代理吞吐大约 100–300 Mbps（协议
 1. 编辑 `/etc/sing-box/config.json`（OpenWrt 包的默认路径），按 sing-box 官方文档写 inbounds / outbounds / route。旁路由典型做法：`tun` 入站 + `auto_route`，或 `mixed` 入站配合防火墙重定向。
 2. `/etc/config/sing-box` 里 `option enabled '1'`；用 TUN 时把 `option user` 改成 `root`（默认 `sing-box` 用户没有创建 TUN 的权限）。
 3. `/etc/init.d/sing-box enable && /etc/init.d/sing-box start`，`logread -f | grep sing-box` 看启动日志。
-4. 网页面板：1.14 起推荐用新的 `services: [{ "type": "api", "listen": "0.0.0.0:9090", "secret": "<密钥>", "dashboard": true }]`（gRPC + gRPC-Web）。`dashboard` 默认从 `SagerNet/sing-box-dashboard` 的 gh-pages 下载，默认每 `1d` 更新，访问 `http://<IP>:9090/dashboard/`；文件默认落在工作目录下的 `dashboard/`，本包的 workdir 是 `/usr/share/sing-box`，所以是 `/usr/share/sing-box/dashboard`。
+4. 网页面板：1.14 起推荐用新的 `services: [{ "type": "api", "listen": "0.0.0.0", "listen_port": 9090, "secret": "<密钥>", "dashboard": true }]`（gRPC + gRPC-Web）。`listen` 只接受地址，写成 `0.0.0.0:9090` 会报 `ParseAddr ... unexpected character`。`dashboard` 默认从 `SagerNet/sing-box-dashboard` 的 gh-pages 下载，默认每 `1d` 更新，访问 `http://<IP>:9090/dashboard/`；文件默认落在工作目录下的 `dashboard/`，本包的 workdir 是 `/usr/share/sing-box`，所以是 `/usr/share/sing-box/dashboard`。
 5. 旧的 `experimental.clash_api` 仍可用，但 `external_ui` 的默认面板是 Yacd，且只在目录为空时下载一次、不自动更新；不想维护两套就只留 api 服务。
 6. 改完配置用 `/etc/init.d/sing-box restart` 生效；升级订阅就是替换 config.json 再 restart。
 

@@ -48,20 +48,6 @@ jobs:
             libncurses-dev libssl-dev libelf-dev libdw-dev zlib1g-dev \
             python3 rsync unzip file wget ccache dwarves
 
-      - name: Restore downloads
-        uses: actions/cache@v4
-        with:
-          path: openwrt/dl
-          key: honk-dl-${{ env.OWRT_VERSION }}-v1
-
-      - name: Restore ccache
-        uses: actions/cache@v4
-        with:
-          path: openwrt/.ccache
-          key: honk-ccache-${{ env.OWRT_VERSION }}-${{ hashFiles('honk/kernel/mvebu-cortexa53.config-6.12') }}
-          restore-keys: |
-            honk-ccache-${{ env.OWRT_VERSION }}-
-
       - name: Clone OpenWrt
         run: |
           set -euo pipefail
@@ -70,8 +56,34 @@ jobs:
           cd openwrt
           echo "src-git vantage https://github.com/anothaDev/luci-theme-vantage.git" \
             >> feeds.conf.default
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
+          ./scripts/feeds update packages luci vantage
+
+      - name: Restore build caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            openwrt/dl
+            openwrt/.ccache
+            openwrt/staging_dir/host
+            openwrt/staging_dir/toolchain-*
+            openwrt/build_dir/host
+            openwrt/build_dir/toolchain-*
+          key: honk-build-${{ env.OWRT_VERSION }}-${{ hashFiles('honk/kernel/mvebu-cortexa53.config-6.12', 'honk/honk-bin/Makefile', '.github/workflows/honk.yml') }}
+          restore-keys: |
+            honk-build-${{ env.OWRT_VERSION }}-
+
+      - name: Install required feeds
+        run: |
+          set -euo pipefail
+          cd openwrt
+          ./scripts/feeds install \
+            luci luci-i18n-base-zh-cn luci-i18n-firewall-zh-cn \
+            luci-app-package-manager luci-i18n-package-manager-zh-cn \
+            ucode-mod-rtnl rpcd-mod-iwinfo rpcd-mod-ucode \
+            curl parted v2ray-geoip v2ray-geosite -p packages
+          ./scripts/feeds install \
+            luci-theme-vantage luci-app-vantage \
+            luci-i18n-vantage-zh-cn luci-i18n-vantage-theme-zh-cn -p vantage
 
       - name: Apply kernel options and local files
         run: |
@@ -158,6 +170,7 @@ jobs:
             ls -lhR bin/targets/"$TARGET_PATH"/ || true
             exit 1
           }
+          CCACHE_DIR="$PWD/.ccache" ccache -s || true
 
       - name: Verify kernel and image contents
         run: |
@@ -165,10 +178,13 @@ jobs:
           cd openwrt
           kconf=$(find build_dir -path '*/linux-*' -name .config -print -quit)
           test -n "$kconf"
-          for symbol in CONFIG_CGROUPS CONFIG_CGROUP_BPF CONFIG_NET_CLS_ACT \
-              CONFIG_NET_XGRESS CONFIG_DEBUG_INFO_BTF; do
-            grep -q "^${symbol}=y" "$kconf" || {
-              echo "::error::${symbol} is not =y in the built kernel"
+          for symbol in CONFIG_BPF CONFIG_BPF_SYSCALL CONFIG_BPF_JIT \
+              CONFIG_CGROUPS CONFIG_CGROUP_BPF CONFIG_NET_SCHED CONFIG_NET_CLS_ACT \
+              CONFIG_NET_XGRESS CONFIG_NET_NS CONFIG_NF_TABLES CONFIG_NF_TABLES_INET \
+              CONFIG_NFT_CT CONFIG_NFT_QUEUE CONFIG_NETFILTER_NETLINK_QUEUE \
+              CONFIG_DEBUG_INFO_BTF; do
+            grep -Eq "^${symbol}=[ym]$" "$kconf" || {
+              echo "::error::${symbol} is neither =y nor =m in the built kernel"
               exit 1
             }
           done
