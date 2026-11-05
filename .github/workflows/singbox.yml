@@ -1,8 +1,9 @@
-name: Build sing-box-tiny package
+name: "Optional: Build sing-box-tiny package"
+
+# Package updates are opt-in. Run build.yml separately to assemble an
+# alternative firmware image after publishing and pinning a package.
 
 on:
-  schedule:
-    - cron: "17 3 * * *"
   workflow_dispatch:
     inputs:
       version:
@@ -15,15 +16,9 @@ on:
         type: boolean
         required: false
         default: false
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/singbox.yml"
-      - "singbox.env"
 
 permissions:
   contents: write
-  actions: write
 
 concurrency:
   group: singbox-tiny
@@ -337,9 +332,3 @@ jobs:
           git commit -m "sing-box-tiny: pin v$VERSION"
           git push
           echo "changed=true" >> "$GITHUB_OUTPUT"
-
-      - name: Trigger firmware build
-        if: steps.pin.outputs.changed == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh workflow run build.yml --ref "$GITHUB_REF_NAME"

@@ -1,10 +1,16 @@
-name: Build MV1000 honk firmware
+name: Build MV1000 honk firmware (default)
 
 # Full OpenWrt source build: the official kernel has neither cgroups nor BTF,
 # and honk refuses to start without CONFIG_CGROUP_BPF. honk itself is not
 # compiled here; the upstream static aarch64 archive is installed by the
 # honk-bin package under honk/honk-bin.
 on:
+  push:
+    branches: [main]
+    paths:
+      - "files/**"
+      - "honk/**"
+      - ".github/workflows/honk.yml"
   workflow_dispatch:
     inputs:
       rootfs_mb:

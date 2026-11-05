@@ -1,135 +1,142 @@
-# GL-MV1000 旁路由（OpenWrt 25.12 + sing-box）构建与刷机
+# GL-MV1000 旁路由：OpenWrt 25.12 + honk
 
-XDR5480 继续做拨号主路由，MV1000 只做旁路由代理。本仓库用 GitHub Actions + OpenWrt Image Builder 出包，把 LuCI、sing-box 和 Argon 主题直接打进镜像，刷完即可用。
+本仓库默认构建 **honk 固件**：从 OpenWrt 25.12.6 源码编译 MV1000 内核，启用 BTF、cgroup BPF 和 ftrace，内置 honk、LuCI、Vantage 及简体中文翻译。该路线已在 GL-MV1000 上完成刷机、真实 eBPF 加载、国内直连和海外代理测试。
 
-## 1. 地址规划
+XDR5480 负责拨号和 DHCP，MV1000 作为单臂旁路由。sing-box/OpenClash 保留为按需手动构建的备用方案，见 [备用固件说明](docs/alternative-firmware.md)。honk 上游仍处于 beta 阶段，实机验证范围见下文。
 
-| 设备 | 地址 | 角色 |
+## 1. 地址与接线
+
+| 设备 | 地址 | 职责 |
 | --- | --- | --- |
-| XDR5480 | `192.168.1.4` | 拨号、DHCP 服务器、默认网关 |
-| GL-MV1000 | `192.168.1.2`（静态） | 旁路由，只跑代理 |
-| 终端 | `192.168.1.100–254`（DHCP） | 网关/DNS 指向 `.2` |
+| XDR5480 | `192.168.1.4` | 拨号、DHCP、MV1000 的上游网关和 DNS |
+| GL-MV1000 | `192.168.1.2` | 静态地址、旁路由代理；关闭 DHCP |
+| 终端 | `192.168.1.100–254` | 启用旁路由时，网关和 DNS 指向 `.2` |
 
-接线：XDR5480 的 LAN 口 → MV1000 的 LAN 口（lan0 或 lan1 都可以）。MV1000 的 WAN 口不接（刷机时也必须不接）。MV1000 关闭 DHCP、删除 WAN 接口，避免和主路由冲突。
+XDR 的 LAN 口接 MV1000 的 LAN 口（`lan0` 或 `lan1`），MV1000 的 WAN 口不接。MV1000 删除 WAN 接口，LAN 区启用 masquerade 和 MSS clamping。
 
-## 2. 插件选型（2026-11 核实）
+## 2. 默认构建：honk.yml
 
-| 方案 | 版本 | 25.12 apk | 依赖 | 适用性 |
-| --- | --- | --- | --- | --- |
-| **sing-box（tiny）** | v1.14.4（独立 workflow 自动跟进上游并发布 apk） | ✅ `aarch64_cortex-a53` | 官方源：kmod-tun、kmod-inet-diag、ca-bundle | **推荐**。tiny 变体固定带 `gvisor/quic/utls/clash_api`，apk 约 14MB（mihomo-meta 是 20.6MB）；官方 feed 只到 1.13.21，CI 自动用最新上游源码编译，顺带换掉旧 Go 标准库。没有 LuCI 应用，靠 JSON 配置 + Clash API 面板 |
-| OpenClash | v0.48.002 | ✅ `luci-app-openclash-0.48.002.apk` | dnsmasq-full、bash、ruby、ruby-yaml、kmod-tun、unzip、ip-full | 功能最全但重；内核默认首次启动才从 GitHub 下载（国内常失败）；会替换 dnsmasq 为 dnsmasq-full |
-| PassWall | 26.10.29-1 | ✅ 提供 apk | 还需要 chinadns-ng、dns2socks、microsocks、tcping、lyaml、luci-compat 等，来自其自有 feed | 非 Clash 方案；出包要多挂一个 feed，折腾成本高 |
+在 GitHub Actions 中选择 **Build MV1000 honk firmware (default)**，点击 **Run workflow**。参数 `rootfs_mb` 默认 `256`，表示根文件系统大小，单位 MiB。
 
-主题固定打包 [luci-theme-argon](https://github.com/jerrykuku/luci-theme-argon) v3.1.2 的官方 apk（PIN 了 SHA256），其自带的 uci-defaults 会把 LuCI 默认主题切成 Argon。
+推送到 `main` 且修改以下任意路径时，也会自动构建 honk 固件：
 
-sing-box tiny 的缺口：**没有 `with_wireguard` / `with_dhcp` / `with_acme` / `with_tailscale`**。节点里有 WireGuard 出站就会报 `unknown outbound type`，需要时在 `net/sing-box/Makefile` 的 tiny 分支补 tag 后重建。
+- `honk/**`：内核配置、本地 honk 包、默认配置和启动脚本。
+- `files/**`：两种固件路线共用的首次启动设置。
+- `.github/workflows/honk.yml`：默认构建流程。
 
-MV1000 是双核 A53 1GHz / 1GB RAM，代理吞吐大约 100–300 Mbps（协议不同差异大），别指望跑满千兆；直连（走绕过规则）可以接近千兆。
+仅修改文档或 sing-box 相关文件不触发 honk 构建。三个 workflow 的职责如下：
 
-## 3. GitHub Actions 出包
+| Workflow | 定位 | 触发方式 | 产物 |
+| --- | --- | --- | --- |
+| [honk.yml](.github/workflows/honk.yml) | 默认固件；自编内核 | 主线文件变更、手动 | MV1000 honk ext4 镜像、配置和日志 |
+| [build.yml](.github/workflows/build.yml) | 备用固件；官方 Image Builder | 仅手动 | sing-box / OpenClash / 无代理镜像 |
+| [singbox.yml](.github/workflows/singbox.yml) | 备用 sing-box 包 | 仅手动 | APK、arm64 二进制、校验文件 |
 
-### 3.1 两个 workflow
+sing-box 包流程不再定时运行，也不再自动触发固件构建。三个 workflow 分别管理自己的缓存，互不调用。
 
-仓库里有两个 workflow，职责分开：
+### 镜像内容
 
-- **Build sing-box-tiny package**：每天定时（以及手动触发）查询 `SagerNet/sing-box` 的最新 release。没编过就在 OpenWrt SDK 里编出 `sing-box-tiny`，发布到 release `singbox-tiny-v<版本>`（含 apk 和 sha256sums），然后把版本和 apk 的 SHA256 写进仓库根目录的 `singbox.env`，再自动触发固件构建。已经编过则几十秒结束。
-- **Build MV1000 firmware**：按 `singbox.env` 钉住的版本从上面那个 release 下载 apk、校验 SHA256，再交给 Image Builder 出镜像。手动运行参数：
-  - `plugin`：`singbox`（默认）/ `openclash` / `none`
-  - `rootfs_mb`：默认 `256`。这个值直接决定 ext4 根分区和整包 raw 大小；U-Boot 网页上传实测 274MB 可以、530MB 会失败，所以别超过 320。剩余 eMMC 空间由首次启动脚本自动建成 `/mnt/data` 数据分区。
+- OpenWrt **25.12.6**，target `mvebu/cortexa53`，设备 profile `glinet_gl-mv1000`，内核 **6.12.112**。
+- 内核启用 `BPF`、`CGROUP_BPF`、网络命名空间、`DEBUG_INFO_BTF`、ftrace 和所需的 nftables/NFQUEUE 模块。
+- `honk-bin` 安装上游 **v0.1.0-beta.5** 的静态 aarch64 musl full 二进制；版本和 SHA256 固定在 [包定义](honk/honk-bin/Makefile)，本流程不编译 Rust。
+- LuCI、包管理器、Vantage 主题与应用、简体中文翻译；默认界面语言为简体中文。
+- Vantage 从上游 feed 编译，当前 feed 提交未固定；版本由构建时的 feed 决定。
+- 预装 `v2ray-geoip`、`v2ray-geosite`、分区和 ext4 工具。
+- `99-bypass-router` 设置 `.2` 静态地址、网关/DNS `.4`、关闭 DHCP/DHCPv6/RA，时区为 `Asia/Shanghai`。
+- `99-data-partition` 在首次启动时使用 eMMC 尾部空闲空间创建 p3，挂载到 `/mnt/data`；脚本保留启动依赖的 MBR 磁盘签名。
 
-固件构建的触发方式：手动运行、推送 `files/**` 或 `singbox.env` 的提交、以及 sing-box workflow 发布新包后的自动触发。产物：`openwrt-25.12.6-mvebu-cortexa53-glinet_gl-mv1000-mv1000-<plugin>-ext4-sdcard.img.gz`。打 tag 推送时会自动发 Release。
+### 构建校验与缓存
 
-自动升级的边界：上游发新版后，包编译失败不会更新 `singbox.env`，固件会继续用上一个能编过的版本。`singbox.env` 是唯一的版本源：`SINGBOX_PIN=1` 时包 workflow 完全不动它（用于回退或钉死版本），改回 `0` 并推送到期后会重新跟上游；`SINGBOX_VERSION` / `SINGBOX_APK_SHA256` 一般不要手改，确需手动钉版本时从对应 release 的 `sha256sums` 里取值，并把 `SINGBOX_PIN` 设为 `1`。
+`make defconfig` 后先验证设备 profile、中文语言选择和关键内核选项。主机工具与工具链编好后立即保存缓存，再编译内核、软件包和镜像；后面的镜像失败不会丢失已保存的工具链缓存。
 
-### 3.2 镜像里做了什么
+发布镜像前检查最终内核配置、`vmlinux` 的 `.BTF` 段、honk 文件、Vantage 目录和五个中文翻译文件。配置和构建日志另存为 `honk-build-config-<run_id>` artifact。
 
-- 基于 `openwrt-imagebuilder-25.12.6-mvebu-cortexa53`，profile `glinet_gl-mv1000`（内核 6.12.112）。
-- 内置 `luci` + 中文语言包 + 包管理器；`sing-box-tiny` 由独立的包 workflow 用 OpenWrt SDK 编译并发布为 `singbox-tiny-v<版本>`，固件构建按 `singbox.env` 的版本和 SHA256 下载校验后打进镜像。feed 里的版本是 1.13.21，包 workflow 会改 `PKG_VERSION/PKG_HASH` 升到上游最新版；tiny 固定 tag 为 `with_gvisor,with_quic,with_utls,with_clash_api,badlinkname,tfogo_checklinkname0`。
-- 内置 `luci-theme-argon` 3.1.2（官方 release apk，构建时校验 SHA256）；包自带的 `/etc/uci-defaults/30_luci-theme-argon` 首次启动把默认主题设为 Argon。
-- `files/etc/uci-defaults/99-bypass-router` 首次启动写入：LAN 静态 `192.168.1.2`、网关/DNS 指向 `.4`、关闭 DHCP/DHCPv6/RA、删除 WAN、LAN 区开启 masquerade + MSS clamping、时区 `Asia/Shanghai`。
-- `files/etc/uci-defaults/99-data-partition` 首次启动检查 eMMC 尾部空闲空间（≥512MB 时），自动建 p3、格式化成 ext4（label `data`）、挂载到 `/mnt/data` 并写入 fstab；后续开机由 `block-mount` 自动挂载。首次启动会多花几十秒格式化。注意：`parted` 会重写 MBR 磁盘签名，而内核命令行的 `root=PARTUUID=...` 依赖它，脚本会在建分区后把备份的签名写回，否则下次启动会因找不到根分区而 panic。
-- `sing-box-tiny` 的 apk 是自编的、Argon 的是第三方 release apk，都没有构建环境认可的签名，所以构建时关闭了 Image Builder 的签名校验；官方包仍从 `downloads.openwrt.org` 走 HTTPS 拉取，Argon 额外用 PIN 的 SHA256 校验，sing-box 按 `singbox.env` 的 SHA256 校验。
-- 用的是 **ext4** 系统镜像：根分区直接可写，没有 overlay；根分区在构建时按 `rootfs_mb` 固定，运行时不做在线扩容（builder 用 `make_ext4fs` 生成的 ext4 不支持加组），eMMC 剩余空间由首启脚本建成 `/mnt/data`。代价是没有 `firstboot` 恢复出厂，重装只能 U-Boot 重刷或提前导出配置。
-- 选 `openclash` 时会预置 `mihomo` 内核到 `/etc/openclash/core/clash_meta`，避免首启时联网下载。
+冷构建实测约 77 分钟，具体随 runner 和网络变化。缓存包含主机工具、交叉工具链、下载目录与准备阶段的 ccache；内核构建目录没有跨运行保存，缓存命中后的耗时需要实测。
 
-### 3.3 为什么不全量编译
+## 3. 分区与刷机
 
-整棵 OpenWrt 源码编译需要 20–30 GB 磁盘和数小时，托管 Runner 撑不住。固件仍然用 Image Builder 出，只有 feed 版本落后的 sing-box 用 SDK 单独编译一个包：包 workflow 约 17 分钟，但仅在上游发新版时跑一次；固件构建只下载已编好的 apk，约 2–3 分钟。只有确实要改内核/驱动时才值得上自建 Runner 做全量编译。
+默认镜像包含两个 ext4 文件系统：
 
-## 4. 刷机（U-Boot 网页恢复）
+| 分区 | 文件系统大小 | 内容 |
+| --- | --- | --- |
+| p1 启动分区 | 32 MiB | Linux `Image`、设备树、`boot.scr` |
+| p2 根分区 | `rootfs_mb`，默认 256 MiB | OpenWrt、honk、LuCI、配置 |
+| p3 数据分区 | 首次启动使用剩余空间创建 | `/mnt/data` |
 
-> 刷机会清空 MV1000 原有系统；GL 原厂固件可从 <https://dl.gl-inet.com/router/mv1000/> 重新刷回。
+`rootfs_mb` 不包含启动分区。默认解压后的镜像实测为 **290.125 MiB**，包含分区对齐和填充；根分区可用容量会小于标称值。保持默认 `256` 适合已验证的 U-Boot 恢复流程，更大的镜像需自行验证上传限制。
 
-1. 下载 artifact，**解压成 `.img`**（Windows 用 7-Zip，或 `tar -xzf xxx.img.gz`）。不要上传 `.gz`，也不要上传 `initramfs-kernel.bin`。
-2. 电脑网卡设静态 `192.168.1.2 / 255.255.255.0`，用网线接 MV1000 的 **LAN 口**，WAN 口不接，先断开其他 `192.168.1.x` 网络。
-3. 按住 Reset（↻）不放，插 USB 电源；等 Power 与 WAN 灯常亮后松开。
-4. 浏览器打开 `http://192.168.1.1`（不要 https），选 `.img` 上传。页面会卡住是正常的，等 3–10 分钟（256 MB 镜像约 5 分钟），设备自动重启。
-5. 电脑网卡改回自动获取，访问 `http://192.168.1.2`，SSH `root@192.168.1.2`（无密码，先 `passwd` 设密码）。
-6. 确认 `df -h /` 显示根分区约等于 `rootfs_mb`，`df -h /mnt/data` 显示 eMMC 剩余空间（约 6GB）。
+本镜像的根分区直接可写，没有 squashfs overlay，也没有传统 `firstboot` 恢复出厂方式。刷机前先将配置和运行状态备份到另一台电脑；固件不包含个人节点、订阅、面板账户或后续设备上的配置修改。
 
-如果上传到固定大小就中断：说明该 U-Boot 对大文件有限制，用 `rootfs_mb=256` 重新出包再刷。
+1. 从成功运行的 `openwrt-25.12.6-mv1000-honk` artifact 下载 `*glinet_gl-mv1000-ext4-sdcard.img.gz` 和 `sha256sums`，核对压缩包 SHA256。
+2. 用 7-Zip 等工具解压得到 **`.img`**。OpenWrt 在 gzip 数据后追加固件元数据，部分解压工具会提示尾部存在附加数据。
+3. 电脑有线网卡设为 `192.168.1.3/24`，接 MV1000 的 LAN 口。使用 `.3` 可以避开新固件的 `.2` 地址。
+4. 按住 Reset 上电，等待恢复模式就绪；访问 `http://192.168.1.1`，上传 `.img`，保持供电和网线，等待自动重启。
+5. 重启后访问 `http://192.168.1.2`。独立接线时电脑保留 `.3`；接回 XDR 网络后可改回 DHCP。
+6. 新固件默认 SSH 为 `ssh root@192.168.1.2`，端口 `22`；首次登录设置密码或密钥。已运行设备上的自定义 SSH 端口不属于镜像默认值。
+7. 检查 `ubus call system board`、`ls -l /sys/kernel/btf/vmlinux` 和 `df -h / /mnt/data`。
 
-## 5. XDR5480 设置
+固件不会自动写入设备。需要回原厂时，从 [GL 下载站](https://dl.gl-inet.com/router/mv1000/) 获取对应镜像，再走 U-Boot 恢复。
 
-在「路由设置 → DHCP 服务器」：
+## 4. honk 首次配置
 
-1. 带机量选「普通」，DHCP 服务器选 **开**（不要「自动」，否则不能自定义网关）。
-2. 地址池改为 `192.168.1.100` – `192.168.1.254`，把 `.2` 和 `.4` 让出来。
-3. 网关填 `192.168.1.2`；首选 DNS 填 `192.168.1.2`；备用 DNS 留 `0.0.0.0`。
-4. 地址租期先改成 `2` 分钟，等终端续租生效后再改回 `120`（或原来的 2880）。
-5. 关闭 IPv6（否则终端走 IPv6 会绕过旁路由）。
-
-切换前先用一台电脑手动设静态 IP `192.168.1.103`、网关/DNS `192.168.1.2` 验证代理可用，再改全局 DHCP。
-
-## 6. sing-box 配置
-
-没有 LuCI 应用，全部走 SSH + JSON 配置：
-
-1. 编辑 `/etc/sing-box/config.json`（OpenWrt 包的默认路径），按 sing-box 官方文档写 inbounds / outbounds / route。旁路由典型做法：`tun` 入站 + `auto_route`，或 `mixed` 入站配合防火墙重定向。
-2. `/etc/config/sing-box` 里 `option enabled '1'`；用 TUN 时把 `option user` 改成 `root`（默认 `sing-box` 用户没有创建 TUN 的权限）。
-3. `/etc/init.d/sing-box enable && /etc/init.d/sing-box start`，`logread -f | grep sing-box` 看启动日志。
-4. 网页面板：1.14 起推荐用新的 `services: [{ "type": "api", "listen": "0.0.0.0", "listen_port": 9090, "secret": "<密钥>", "dashboard": true }]`（gRPC + gRPC-Web）。`listen` 只接受地址，写成 `0.0.0.0:9090` 会报 `ParseAddr ... unexpected character`。`dashboard` 默认从 `SagerNet/sing-box-dashboard` 的 gh-pages 下载，默认每 `1d` 更新，访问 `http://<IP>:9090/dashboard/`；文件默认落在工作目录下的 `dashboard/`，本包的 workdir 是 `/usr/share/sing-box`，所以是 `/usr/share/sing-box/dashboard`。
-5. 旧的 `experimental.clash_api` 仍可用，但 `external_ui` 的默认面板是 Yacd，且只在目录为空时下载一次、不自动更新；不想维护两套就只留 api 服务。
-6. 改完配置用 `/etc/init.d/sing-box restart` 生效；升级订阅就是替换 config.json 再 restart。
-
-> 路由器自身流量是否走代理由 route 规则决定；旁路由场景一般把 `br-lan` 的转发流量导入 tun，本机流量直连，避免回环。
-
-## 7. 验证与排错
+**新镜像中的 honk 默认关闭**，默认路由为直连。先在 `/etc/honk/config.dae` 添加节点、分组和分流，再启动服务：
 
 ```sh
-# 旁路由上
-pgrep -af 'sing-box run'             # 进程是否在跑
-logread | grep -i sing-box           # 启动日志
-ip link show tun0                    # TUN 是否建起来
-curl -s -H "Authorization: Bearer <secret>" http://127.0.0.1:9090/proxies | head
-
-# 终端上（网关/DNS 都应是 192.168.1.2）
-curl -s https://api.ipify.org         # 应显示代理出口 IP
-nslookup google.com 192.168.1.2
+/etc/init.d/honk start
+logread -e honk
+# 验证节点、DNS 和终端转发后再开启自启
+/etc/init.d/honk enable
 ```
 
-常见问题：
+内置原生面板配置为 `http://192.168.1.2:9527/ui/`，首次访问创建管理员账户。Clash API 默认只监听 `127.0.0.1:9090`。图形面板里的“导入、修订历史”需要数据库配置模式；beta.5 的数据库模式不能同时启用 Clash API。
 
-- **终端没网、旁路由正常**：检查 XDR 的网关/DNS 是否真的下发成 `.2`（终端 `ipconfig /all` 看租约），必要时重启终端网卡。
-- **部分 App 仍显示国内 IP**：浏览器 DoH/DoT、或应用自带 DNS 会绕过劫持；在 App 内关掉安全 DNS。
-- **IPv6 泄漏**：XDR 的 IPv6 必须关闭，或确认 sing-box 的 DNS/route 规则覆盖了 IPv6。
-- **sing-box 启动失败**：先 `sing-box check -c /etc/sing-box/config.json` 校验配置；常见是用了 tiny 未编译的出站类型（WireGuard/DHCP/ACME/Tailscale），或 TUN 模式下 `user` 没改成 `root`。
-- **端口 53 被 dnsmasq 占用**：用 TUN + `auto_route` 时无需自己监听 53；若配置了 DNS 入站，先在「DHCP/DNS」里关闭 dnsmasq 的 DNS 服务。
+### 已验证的旁路由设置
 
-## 8. 回滚
+以下是实机部署经验，需要按使用场景配置，**不是默认镜像已完成的个人配置**：
 
-- 想回 GL 原厂：从 GL 下载站取 MV1000 的 `.img`，用同样的 U-Boot 流程刷回。
-- 想临时恢复上网：XDR 的 DHCP 网关改回 `0.0.0.0`（自动）或 `192.168.1.4`，DNS 改回自动。
-- 旁路由刷坏：U-Boot 恢复不依赖系统，随时可以重刷。
+- `lan_interface: br-lan`，`wan_interface: auto`，用于 LAN 转发与路由器本机流量。
+- 单臂旁路由关闭 `net.ipv4.conf.all.send_redirects`、`net.ipv4.conf.br-lan.send_redirects`，并确保 `net.ipv4.conf.all.rp_filter=0`。可写入 `/etc/sysctl.d/60-honk-single-arm.conf` 后用 `sysctl -p` 应用。
+- 使用 MetaCubeX 完整地理库时，国内 DNS 和直连规则使用 `geosite:cn`。实测 `geolocation-cn` 不覆盖 B 站、QQ、淘宝，不能作为这些服务的完整国内列表。
+- DNS 可由 dnsmasq 转发到 honk 的 `127.0.0.1:1053`；国内查询走 XDR `.4`，海外查询经代理走 DoH。XDR 自身 DNS 上游应保持运营商或独立上游，避免回指 `.2` 形成循环。
+- `/usr/share/honk/*.dat` 可以使用包提供的链接；**不要在 `global.data_dir` 内创建指向系统地理库的软链接**，否则面板更新可能报 `replacement_failed`。更新器会在数据目录生成独立文件。
+- 浏览器使用系统 DNS 才能遵循该 DNS 分流。Chrome 强制使用海外安全 DNS 会绕过 honk 的 DNS 选择，导致国内站点命中海外 CDN。
+- `client_subnet: auto` 为可选的自动 ECS。当前 XDR/运营商上游测试中推断和报文添加正常，但未观察到提速，因此部署保持关闭。
+
+默认配置不预置付费节点，也不保证所有 sing-box 参数都有 honk 对应项。beta.5 不支持 Hysteria2 `gecko` 混淆，迁移时需检查协议和传输参数。
+
+## 5. 启用终端与排查
+
+先用一台终端将网关和 DNS 指向 `.2`，测试国内直连和海外代理。验证通过后，在 XDR 的 DHCP 设置中下发网关 `192.168.1.2`、首选 DNS `192.168.1.2`，避免同时提供会绕过策略的备用 DNS，终端重新获取租约。当前方案未配置全网 IPv6 代理时，关闭 XDR 的 IPv6 下发。
+
+```sh
+# MV1000 上
+ubus call system board
+ls -l /sys/kernel/btf/vmlinux
+/etc/init.d/honk running
+logread -e honk
+df -h / /mnt/data
+
+# 终端上
+nslookup www.baidu.com 192.168.1.2
+nslookup www.google.com 192.168.1.2
+curl https://www.gstatic.com/generate_204
+```
+
+| 现象 | 检查方向 |
+| --- | --- |
+| 国内站点变慢 | 国内 DNS/流量是否同时匹配 `geosite:cn`；浏览器是否启用海外 DoH；实际 CDN 地址是否在国内 |
+| honk 运行但终端无代理 | 终端网关/DNS、接口绑定、单臂旁路由 redirect/rp_filter 设置 |
+| 地理数据更新报 `replacement_failed` | 数据目录中是否有 `.dat` 软链接或文件冲突；查看更新操作和 syslog |
+| UDP 跟踪不可用 | 当前实机存在可选 UDP 接收追踪降级；诊断证据可能不完整，需按业务测试 UDP |
+| 新镜像没有个人配置 | 从独立备份恢复节点、账户和运行状态；设备后续修改不会自动进入仓库 |
+
+需要暂时绕过 MV1000 时，终端或 XDR DHCP 的网关/DNS改回主路由对应设置。
 
 ## 参考
 
-- OpenWrt 设备页：<https://openwrt.org/toh/gl.inet/gl-mv1000>
-- 25.12.6 固件 / Image Builder / SDK：<https://downloads.openwrt.org/releases/25.12.6/targets/mvebu/cortexa53/>
-- Image Builder 文档：<https://openwrt.org/docs/guide-user/additional-software/imagebuilder>
-- GL U-Boot 恢复：<https://docs.gl-inet.cn/router/3/features/uboot/>
-- sing-box：<https://github.com/SagerNet/sing-box>
-- sing-box OpenWrt 包定义：<https://github.com/openwrt/packages/blob/openwrt-25.12/net/sing-box/Makefile>
-- luci-theme-argon：<https://github.com/jerrykuku/luci-theme-argon>
-- OpenClash：<https://github.com/vernesong/OpenClash>
-- PassWall：<https://github.com/Openwrt-Passwall/openwrt-passwall>
+- [honk 项目与文档](https://github.com/daeuniverse/honk)
+- [OpenWrt GL-MV1000 设备页](https://openwrt.org/toh/gl.inet/gl-mv1000)
+- [OpenWrt 25.12.6 mvebu/cortexa53 下载](https://downloads.openwrt.org/releases/25.12.6/targets/mvebu/cortexa53/)
+- [GL U-Boot 恢复说明](https://docs.gl-inet.cn/router/3/features/uboot/)
+- [Vantage 主题与应用](https://github.com/anothaDev/luci-theme-vantage)
+- [备用 sing-box / OpenClash 固件](docs/alternative-firmware.md)

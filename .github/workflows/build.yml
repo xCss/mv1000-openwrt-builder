@@ -1,4 +1,7 @@
-name: Build MV1000 firmware
+name: "Optional: Build MV1000 sing-box/OpenClash firmware"
+
+# The default firmware is built by honk.yml. Use this Image Builder route
+# manually when a sing-box, OpenClash or proxy-free image is needed.
 
 on:
   workflow_dispatch:
@@ -15,12 +18,6 @@ on:
         description: "Root filesystem size in MB (256 / 512 / 1024)"
         type: string
         default: "256"
-  push:
-    branches: [main]
-    paths:
-      - "files/**"
-      - "singbox.env"
-      - ".github/workflows/build.yml"
 
 permissions:
   contents: write
@@ -39,9 +36,8 @@ env:
   VANTAGE_VERSION: "1.0.14"
 
 jobs:
-  # A pushed change can land before the sing-box workflow has published the
-  # pinned apk. Skip (do not fail) until singbox.env points at an existing
-  # release; the sing-box workflow dispatches this one once it does.
+  # A sing-box image requires the package pinned in singbox.env. Build it
+  # manually with singbox.yml before requesting the firmware image.
   preflight:
     runs-on: ubuntu-latest
     outputs:
@@ -61,10 +57,10 @@ jobs:
             sha=$(sed -n 's/^SINGBOX_APK_SHA256=//p' singbox.env 2>/dev/null || true)
             if [ -z "$version" ] || [ -z "$sha" ]; then
               ok=false
-              echo "::warning::singbox.env is not pinned yet; waiting for the sing-box workflow"
+              echo "::warning::singbox.env is not pinned; run singbox.yml before building a sing-box image"
             elif ! gh release view "singbox-tiny-v$version" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
               ok=false
-              echo "::warning::release singbox-tiny-v$version is missing; waiting for the sing-box workflow"
+              echo "::warning::release singbox-tiny-v$version is missing; run singbox.yml before building a sing-box image"
             fi
           fi
           echo "ok=$ok" >> "$GITHUB_OUTPUT"
