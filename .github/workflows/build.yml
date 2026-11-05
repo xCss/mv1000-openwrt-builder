@@ -1,7 +1,7 @@
 name: "Optional: Build MV1000 sing-box/OpenClash firmware"
 
-# The default firmware is built by honk.yml. Use this Image Builder route
-# manually when a sing-box, OpenClash or proxy-free image is needed.
+# The default universal firmware is built by honk.yml and supports installing
+# sing-box later. This optional route assembles an official-kernel image.
 
 on:
   workflow_dispatch:

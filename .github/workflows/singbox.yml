@@ -1,7 +1,7 @@
 name: "Optional: Build sing-box-tiny package"
 
-# Package updates are opt-in. Run build.yml separately to assemble an
-# alternative firmware image after publishing and pinning a package.
+# Package updates are opt-in. Install the APK on the universal honk.yml
+# firmware, or run build.yml separately for an official-kernel image.
 
 on:
   workflow_dispatch:

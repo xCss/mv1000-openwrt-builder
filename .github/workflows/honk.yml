@@ -1,9 +1,10 @@
-name: Build MV1000 honk firmware (default)
+name: Build MV1000 universal firmware (honk default)
 
 # Full OpenWrt source build: the official kernel has neither cgroups nor BTF,
 # and honk refuses to start without CONFIG_CGROUP_BPF. honk itself is not
 # compiled here; the upstream static aarch64 archive is installed by the
-# honk-bin package under honk/honk-bin.
+# honk-bin package under honk/honk-bin. The same kernel includes the modules
+# needed to install sing-box-tiny later (TUN/auto_redirect or nftables TPROXY).
 on:
   push:
     branches: [main]
@@ -103,6 +104,13 @@ jobs:
           mkdir -p package/honk-bin
           cp -a "$GITHUB_WORKSPACE/honk/honk-bin/." package/honk-bin/
           cp -a "$GITHUB_WORKSPACE/files/." package/base-files/files/
+          cat > package/base-files/files/etc/mv1000-build-info <<EOF
+          FIRMWARE_FLAVOR=honk-singbox
+          OPENWRT_VERSION=${OWRT_VERSION}
+          TARGET_PROFILE=${PROFILE}
+          SOURCE_COMMIT=${GITHUB_SHA}
+          BUILD_RUN_ID=${GITHUB_RUN_ID}
+          EOF
           find package/base-files/files/etc/uci-defaults -type f \
             -exec chmod 0755 {} +
 
@@ -162,6 +170,12 @@ jobs:
           CONFIG_PACKAGE_kmod-nft-queue=y
           CONFIG_PACKAGE_kmod-nfnetlink-queue=y
           CONFIG_PACKAGE_kmod-nf-conntrack=y
+          CONFIG_PACKAGE_kmod-tun=y
+          CONFIG_PACKAGE_kmod-inet-diag=y
+          CONFIG_PACKAGE_kmod-nft-nat=y
+          CONFIG_PACKAGE_kmod-nft-fib=y
+          CONFIG_PACKAGE_kmod-nft-tproxy=y
+          CONFIG_PACKAGE_kmod-nft-socket=y
           CONFIG_PACKAGE_v2ray-geoip=y
           CONFIG_PACKAGE_v2ray-geosite=y
           EOF
@@ -177,6 +191,10 @@ jobs:
               CONFIG_PACKAGE_luci-i18n-vantage-theme-zh-cn \
               CONFIG_PACKAGE_honk-bin CONFIG_PACKAGE_luci-theme-vantage \
               CONFIG_PACKAGE_luci-app-vantage CONFIG_PACKAGE_kmod-sched-bpf \
+              CONFIG_PACKAGE_kmod-tun CONFIG_PACKAGE_kmod-inet-diag \
+              CONFIG_PACKAGE_kmod-nft-nat CONFIG_PACKAGE_kmod-nft-fib \
+              CONFIG_PACKAGE_kmod-nft-tproxy CONFIG_PACKAGE_kmod-nf-tproxy \
+              CONFIG_PACKAGE_kmod-nft-socket CONFIG_PACKAGE_kmod-nf-socket \
               CONFIG_KERNEL_CGROUPS CONFIG_KERNEL_CGROUP_BPF \
               CONFIG_KERNEL_NAMESPACES CONFIG_KERNEL_NET_NS \
               CONFIG_KERNEL_DEBUG_INFO CONFIG_KERNEL_DEBUG_INFO_BTF \
@@ -265,12 +283,40 @@ jobs:
             }
           done
           for symbol in CONFIG_NF_TABLES CONFIG_NF_TABLES_INET CONFIG_NFT_CT \
-              CONFIG_NFT_QUEUE CONFIG_NETFILTER_NETLINK_QUEUE; do
+              CONFIG_NFT_QUEUE CONFIG_NETFILTER_NETLINK_QUEUE \
+              CONFIG_TUN CONFIG_INET_DIAG CONFIG_INET_TCP_DIAG \
+              CONFIG_INET_UDP_DIAG CONFIG_INET_RAW_DIAG \
+              CONFIG_NFT_NAT CONFIG_NFT_FIB_INET \
+              CONFIG_NFT_TPROXY CONFIG_NF_TPROXY_IPV4 CONFIG_NF_TPROXY_IPV6 \
+              CONFIG_NFT_SOCKET CONFIG_NF_SOCKET_IPV4 CONFIG_NF_SOCKET_IPV6; do
             grep -Eq "^${symbol}=[ym]$" "$kconf" || {
               echo "::error::${symbol} is neither =y nor =m in the built kernel"
               exit 1
             }
           done
+          mapfile -t roots < <(find build_dir -type d -path '*/root-mvebu')
+          test "${#roots[@]}" -eq 1
+          root="${roots[0]}"
+          grep -qx 'FIRMWARE_FLAVOR=honk-singbox' "$root/etc/mv1000-build-info"
+          grep -qx "SOURCE_COMMIT=${GITHUB_SHA}" "$root/etc/mv1000-build-info"
+          for package in kmod-tun kmod-inet-diag kmod-nft-nat kmod-nft-fib \
+              kmod-nft-tproxy kmod-nf-tproxy kmod-nft-socket kmod-nf-socket; do
+            test -s "$root/lib/apk/packages/${package}.list" || {
+              echo "::error::${package} is not installed in the image"
+              exit 1
+            }
+          done
+          for module in tun inet_diag tcp_diag udp_diag raw_diag nft_tproxy \
+              nf_tproxy_ipv4 nf_tproxy_ipv6 nft_socket nf_socket_ipv4 nf_socket_ipv6; do
+            test -n "$(find "$root/lib/modules" -type f -name "${module}.ko*" -print -quit)" || {
+              echo "::error::missing installed kernel module: ${module}"
+              exit 1
+            }
+          done
+          test -s "$root/etc/modules.d/30-tun" || {
+            echo "::error::TUN module has no boot autoload entry"
+            exit 1
+          }
           vmlinux="$(dirname "$kconf")/vmlinux"
           readelf -SW "$vmlinux" > "$RUNNER_TEMP/honk-vmlinux-sections.txt"
           grep -Eq '[[:space:]]\.BTF[[:space:]]' "$RUNNER_TEMP/honk-vmlinux-sections.txt" || {
@@ -287,6 +333,46 @@ jobs:
             }
           done
           ls -lh bin/targets/mvebu/cortexa53/
+
+      - name: Collect image and matching kernel packages
+        run: |
+          set -euo pipefail
+          cd openwrt
+          out="$RUNNER_TEMP/mv1000-kernel-packages"
+          mkdir -p "$out"
+          # Keep the kernel ABI marker and every built kmod from this run.
+          # These packages must never be mixed with official-kernel kmods.
+          mapfile -t packages < <(find "bin/targets/$TARGET_PATH/packages" -maxdepth 1 \
+            -type f \( -name 'kernel-*.apk' -o -name 'kmod-*.apk' \))
+          test "${#packages[@]}" -gt 0
+          cp "${packages[@]}" "$out/"
+          for package in kernel kmod-tun kmod-inet-diag kmod-nft-nat kmod-nft-fib \
+              kmod-nft-tproxy kmod-nf-tproxy kmod-nft-socket kmod-nf-socket; do
+            matches=("$out/${package}-"[0-9]*.apk)
+            test "${#matches[@]}" -eq 1 && test -s "${matches[0]}" || {
+              echo "::error::missing or ambiguous kernel package: ${package}"
+              exit 1
+            }
+          done
+          cp package/base-files/files/etc/mv1000-build-info "$out/"
+          mapfile -t vermagics < <(find build_dir -type f \
+            -path '*/linux-mvebu_cortexa53/linux-[0-9]*/.vermagic')
+          test "${#vermagics[@]}" -eq 1
+          test -s "${vermagics[0]}"
+          cp "${vermagics[0]}" "$out/kernel.vermagic"
+          ( cd "$out" && sha256sum ./*.apk mv1000-build-info kernel.vermagic > sha256sums )
+
+          # Stage the image in one directory to keep artifact paths flat.
+          image_out="$RUNNER_TEMP/mv1000-image"
+          mkdir -p "$image_out"
+          mapfile -t images < <(find "bin/targets/$TARGET_PATH" -maxdepth 1 \
+            -type f -name "*-${PROFILE}-ext4-sdcard.img.gz")
+          mapfile -t manifests < <(find "bin/targets/$TARGET_PATH" -maxdepth 1 \
+            -type f -name "*-${PROFILE}.manifest")
+          test "${#images[@]}" -eq 1
+          test "${#manifests[@]}" -eq 1
+          cp "${images[0]}" "${manifests[0]}" "bin/targets/$TARGET_PATH/sha256sums" "$image_out/"
+          cp package/base-files/files/etc/mv1000-build-info "$image_out/"
 
       - name: Report build failure
         if: failure()
@@ -308,6 +394,7 @@ jobs:
             ${{ runner.temp }}/honk-vmlinux-sections.txt
             ${{ runner.temp }}/honk-toolchain.log
             ${{ runner.temp }}/honk-build.log
+            openwrt/package/base-files/files/etc/mv1000-build-info
           include-hidden-files: true
           if-no-files-found: warn
 
@@ -315,9 +402,14 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: openwrt-${{ env.OWRT_VERSION }}-mv1000-honk
-          path: |
-            openwrt/bin/targets/mvebu/cortexa53/*glinet_gl-mv1000-ext4-sdcard.img.gz
-            openwrt/bin/targets/mvebu/cortexa53/sha256sums
+          path: ${{ runner.temp }}/mv1000-image/
+          if-no-files-found: error
+
+      - name: Upload matching kernel packages
+        uses: actions/upload-artifact@v7
+        with:
+          name: mv1000-kernel-packages-${{ github.run_id }}
+          path: ${{ runner.temp }}/mv1000-kernel-packages/
           if-no-files-found: error
 
       - name: Publish release assets on tag

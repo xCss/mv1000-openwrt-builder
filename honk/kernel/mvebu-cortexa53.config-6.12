@@ -1,6 +1,8 @@
-# Extra kernel options for the honk experiment on mvebu/cortexa53 (MV1000).
+# Extra kernel options for the universal mvebu/cortexa53 (MV1000) firmware.
 # Matching CONFIG_KERNEL_* options in honk.yml must also be enabled: OpenWrt
 # applies those after this fragment and can override cgroups, BTF and ftrace.
+# TUN, inet-diag and nftables TPROXY/socket modules are selected as kmod
+# packages in honk.yml so their files and APK dependencies enter the image.
 CONFIG_CGROUPS=y
 CONFIG_CGROUP_BPF=y
 CONFIG_NET_CLS_ACT=y

@@ -1,6 +1,8 @@
 # 备用方案：sing-box / OpenClash
 
-仓库默认路线为 [honk 固件](../README.md)。需要 sing-box、OpenClash 或不带代理的官方内核固件时，手动运行本文中的 workflow。
+仓库默认路线为 [honk / sing-box 通用固件](../README.md)。**已有新通用固件时，使用 sing-box 只需安装程序并切换服务/DNS，无需另刷本文的镜像**，步骤见 [同一固件安装与切换](proxy-switching.md)。
+
+本文保留官方预编译内核的 Image Builder 路线。需要这种内核的 sing-box、OpenClash 或不带代理镜像时，手动运行以下 workflow。
 
 ## 手动构建固件
 
@@ -28,7 +30,7 @@ gh workflow run build.yml --ref main -f plugin=openclash -f rootfs_mb=256
 
 ## 按需更新 sing-box 包
 
-`build.yml` 的 sing-box 分支依赖 [singbox.env](../singbox.env) 指定的 `singbox-tiny-v<版本>` Release。如果包不存在，先运行 **Optional: Build sing-box-tiny package**（[singbox.yml](../.github/workflows/singbox.yml)）。
+新通用固件后装 sing-box，以及 `build.yml` 的 sing-box 分支，都可以使用 [singbox.env](../singbox.env) 指定的 `singbox-tiny-v<版本>` Release。如果包不存在，先运行 **Optional: Build sing-box-tiny package**（[singbox.yml](../.github/workflows/singbox.yml)）。
 
 该流程只接受手动触发，没有定时任务、推送触发或下游固件自动触发：
 
@@ -37,14 +39,14 @@ gh workflow run build.yml --ref main -f plugin=openclash -f rootfs_mb=256
 - `force=true`：即使 Release 中已有包也重新构建。
 
 ```sh
-# 按需更新 singbox.env 指向的稳定版；完成后另行运行 build.yml
+# 按需更新稳定版；完成后将 APK 装入通用固件，或另行运行 build.yml
 gh workflow run singbox.yml --ref main
 
 # 构建指定测试版，不修改固件版本选择
 gh workflow run singbox.yml --ref main -f version=1.15.0-alpha.13
 ```
 
-编译失败时不更新 `singbox.env`。手动固定版本时，从对应 Release 的 `sha256sums` 取 APK 哈希，更新 `SINGBOX_VERSION`、`SINGBOX_APK_SHA256`，并设 `SINGBOX_PIN=1`。随后手动运行 `build.yml`。
+编译失败时不更新 `singbox.env`。手动固定版本时，从对应 Release 的 `sha256sums` 取 APK 哈希，更新 `SINGBOX_VERSION`、`SINGBOX_APK_SHA256`，并设 `SINGBOX_PIN=1`。随后在通用固件上安装该 APK，或手动运行 `build.yml` 预装到官方内核镜像。
 
 sing-box tiny 使用独立 Go 交叉编译和 OpenWrt SDK 的 APK 打包工具。固定 tags 为 `with_gvisor,with_quic,with_utls,with_clash_api,badlinkname,tfogo_checklinkname0`，不包含 WireGuard、DHCP、ACME、Tailscale 对应功能。
 
@@ -79,6 +81,6 @@ logread -e sing-box
 
 TUN、DNS、路由和节点规则需要另行配置。浏览器使用系统 DNS，才能遵循旁路由 DNS 策略。honk 与 sing-box 的透明接管不应同时启用。
 
-如果切回 honk，重新构建或刷入 `honk.yml` 产物并恢复 honk 的独立配置备份；备用镜像不提供自定义 honk 内核。
+**在通用固件上切回 honk，无需重刷**，按 [切换说明](proxy-switching.md) 恢复服务和 DNS 即可。只有刷入了本文的官方内核备用镜像，才需要换回 `honk.yml` 产物；该备用镜像不提供 honk 所需的自定义内核。
 
 参考：[sing-box](https://github.com/SagerNet/sing-box)、[OpenClash](https://github.com/vernesong/OpenClash)、[Image Builder](https://openwrt.org/docs/guide-user/additional-software/imagebuilder)。
