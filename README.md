@@ -30,7 +30,7 @@
 
 ## 刷机
 
-**先把配置和状态备份到电脑。**镜像不含个人节点、订阅和账户；根分区为可写 ext4，不提供传统 `firstboot` 恢复出厂功能。
+**先把配置和状态备份到电脑**。镜像不含个人节点、订阅和账户；根分区为可写 ext4，不提供传统 `firstboot` 恢复出厂功能。
 
 1. 下载 `*glinet_gl-mv1000-ext4-sdcard.img.gz`，按 `sha256sums` 校验后解压为 **`.img`**。部分解压工具会提示 gzip 尾部附有 OpenWrt 元数据。
 2. 断开 MV1000 与主路由的连接，电脑有线网卡设为 `192.168.1.3/24`，直连 MV1000 的 LAN 口，避免恢复地址与主路由冲突。
@@ -49,7 +49,7 @@ ls -l /sys/kernel/btf/vmlinux /dev/net/tun
 
 ## 启用 honk
 
-**honk 默认关闭，初始规则为直连。**先在 `/etc/honk/config.dae` 配置节点、DNS 和分流，再启动：
+**honk 默认关闭，初始规则为直连**。先在 `/etc/honk/config.dae` 配置节点、DNS 和分流，再启动：
 
 ```sh
 /etc/init.d/honk start
