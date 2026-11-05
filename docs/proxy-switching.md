@@ -34,7 +34,7 @@ uci commit sing-box
 
 ## 切到 sing-box
 
-以下命令适用于本仓库的地址规划，并假定 sing-box 已配置好 TUN 和 DNS 劫持，XDR `.4` 是独立 DNS 上游。
+以下沿用 [README 的地址示例](../README.md#接线与地址)：主路由 `192.168.1.1`、旁路由 `192.168.1.2`。假定 sing-box 已配置好 TUN 和 DNS 劫持，主路由提供独立 DNS 上游；执行前将示例地址替换为实际地址。
 
 ```sh
 sing-box check -c /etc/sing-box/config.json || exit 1
@@ -49,7 +49,7 @@ cp -p /etc/config/dhcp /root/proxy-switch/dhcp.honk
 ```sh
 uci set dhcp.@dnsmasq[0].noresolv='1'
 uci -q delete dhcp.@dnsmasq[0].server
-uci add_list dhcp.@dnsmasq[0].server='192.168.1.4'
+uci add_list dhcp.@dnsmasq[0].server='192.168.1.1'
 uci commit dhcp
 /etc/init.d/dnsmasq restart
 uci set sing-box.main.enabled='1'
