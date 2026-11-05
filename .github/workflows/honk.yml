@@ -159,9 +159,8 @@ jobs:
         run: |
           set -euo pipefail
           cd openwrt
-          make -j"$(nproc)" download
-          # world already assembles the images via target/linux/install; there
-          # is no top-level "image" target in buildroot.
+          # world downloads missing sources and assembles the images via
+          # target/linux/install; no separate download or image target is needed.
           make -j"$(nproc)" world
 
           img=$(find bin/targets/"$TARGET_PATH" -name '*sdcard.img.gz' -print -quit)
