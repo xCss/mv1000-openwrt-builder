@@ -9,13 +9,15 @@
 | 参数 | 可选值 | 默认 |
 | --- | --- | --- |
 | `plugin` | `singbox` / `openclash` / `none` | `singbox` |
-| `rootfs_mb` | 根分区大小，单位 MiB | `256` |
+| `rootfs_mb` | 镜像内初始根分区 MiB，首次启动自动扩展 | `256` |
 
 ```sh
 gh workflow run build.yml --ref main -f plugin=singbox -f rootfs_mb=256
 ```
 
 此路线用官方 Image Builder 和预编译内核组装镜像，预装 LuCI、中文 Vantage 及所选代理。sing-box 使用 `singbox.env` 指定的 APK；OpenClash 额外安装依赖，并预置上游 mihomo 程序。
+
+与默认固件共享 [根分区自动扩容](rootfs-expansion.md)：完整刷入后使用剩余 eMMC 扩大 `/`，不再创建 `/mnt/data`。旧 p3 布局的迁移要求见该文档。
 
 产物为 `openwrt-25.12.6-mv1000-<plugin>`，按 [README 刷机步骤](../README.md#刷机) 操作。**该镜像不包含 honk 的自定义内核能力**，要运行 honk 需换回通用固件。
 

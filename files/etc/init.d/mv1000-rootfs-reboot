@@ -1,0 +1,14 @@
+#!/bin/sh /etc/rc.common
+# Used by /etc/rc.common.
+# shellcheck disable=SC2034
+START=99
+
+boot() {
+	[ -f /tmp/mv1000-rootfs-reboot ] || return 0
+	rm -f /tmp/mv1000-rootfs-reboot
+	logger -t mv1000-grow-rootfs 'Rebooting once to reread the enlarged root partition'
+	sync
+	/sbin/reboot
+}
+
+start() { return 0; }

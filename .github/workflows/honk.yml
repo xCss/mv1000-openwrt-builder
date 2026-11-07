@@ -11,11 +11,13 @@ on:
     paths:
       - "files/**"
       - "honk/**"
+      - "tests/**"
+      - "scripts/**"
       - ".github/workflows/honk.yml"
   workflow_dispatch:
     inputs:
       rootfs_mb:
-        description: "Root filesystem size in MB (256 / 512 / 1024)"
+        description: "Initial root filesystem MiB (256 recommended; auto-grows on first boot)"
         type: string
         default: "256"
 
@@ -53,7 +55,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential gawk gettext git \
             libncurses-dev libssl-dev libelf-dev libdw-dev zlib1g-dev \
-            python3 rsync unzip file wget ccache dwarves
+            python3 rsync unzip file wget ccache dwarves fdisk e2fsprogs shellcheck bsdextrautils
+
+      - name: Test root filesystem growth on disposable disks
+        run: |
+          shellcheck -s sh files/lib/mv1000-rootfs.sh files/usr/libexec/mv1000-grow-rootfs \
+            files/etc/uci-defaults/99-grow-rootfs files/etc/init.d/mv1000-rootfs-reboot
+          shellcheck -s sh scripts/prepare-rootfs-ext4.sh
+          sudo python3 tests/rootfs_growth.py
 
       - name: Clone OpenWrt
         run: |
@@ -61,6 +70,7 @@ jobs:
           git clone --depth 1 --branch "v${OWRT_VERSION}" \
             https://github.com/openwrt/openwrt.git openwrt
           cd openwrt
+          python3 "$GITHUB_WORKSPACE/scripts/patch-image-build.py" .
           echo "src-git vantage https://github.com/anothaDev/luci-theme-vantage.git" \
             >> feeds.conf.default
           ./scripts/feeds update packages luci vantage
@@ -110,9 +120,16 @@ jobs:
           TARGET_PROFILE=${PROFILE}
           SOURCE_COMMIT=${GITHUB_SHA}
           BUILD_RUN_ID=${GITHUB_RUN_ID}
+          ROOTFS_LAYOUT=ext4-grow-p2
+          ROOTFS_INITIAL_MIB=${ROOTFS_MB}
           EOF
           find package/base-files/files/etc/uci-defaults -type f \
             -exec chmod 0755 {} +
+          chmod 0755 package/base-files/files/usr/libexec/mv1000-grow-rootfs \
+            package/base-files/files/etc/init.d/mv1000-rootfs-reboot
+          mkdir -p package/base-files/files/etc/rc.d
+          ln -sf ../init.d/mv1000-rootfs-reboot \
+            package/base-files/files/etc/rc.d/S99mv1000-rootfs-reboot
 
           CCACHE_DIR="$PWD/.ccache" ccache -M 2G || true
 
@@ -161,6 +178,10 @@ jobs:
           CONFIG_PACKAGE_parted=y
           CONFIG_PACKAGE_block-mount=y
           CONFIG_PACKAGE_e2fsprogs=y
+          CONFIG_PACKAGE_resize2fs=y
+          CONFIG_PACKAGE_sfdisk=y
+          CONFIG_PACKAGE_partx-utils=y
+          CONFIG_PACKAGE_blkid=y
           CONFIG_PACKAGE_wget-ssl=y
           CONFIG_PACKAGE_honk-bin=y
           CONFIG_PACKAGE_kmod-veth=y
@@ -190,6 +211,8 @@ jobs:
               CONFIG_PACKAGE_luci-i18n-vantage-zh-cn \
               CONFIG_PACKAGE_luci-i18n-vantage-theme-zh-cn \
               CONFIG_PACKAGE_honk-bin CONFIG_PACKAGE_luci-theme-vantage \
+              CONFIG_PACKAGE_resize2fs CONFIG_PACKAGE_sfdisk \
+              CONFIG_PACKAGE_partx-utils CONFIG_PACKAGE_blkid \
               CONFIG_PACKAGE_luci-app-vantage CONFIG_PACKAGE_kmod-sched-bpf \
               CONFIG_PACKAGE_kmod-tun CONFIG_PACKAGE_kmod-inet-diag \
               CONFIG_PACKAGE_kmod-nft-nat CONFIG_PACKAGE_kmod-nft-fib \
@@ -299,6 +322,20 @@ jobs:
           root="${roots[0]}"
           grep -qx 'FIRMWARE_FLAVOR=honk-singbox' "$root/etc/mv1000-build-info"
           grep -qx "SOURCE_COMMIT=${GITHUB_SHA}" "$root/etc/mv1000-build-info"
+          grep -qx 'ROOTFS_LAYOUT=ext4-grow-p2' "$root/etc/mv1000-build-info"
+          test -s "$root/lib/mv1000-rootfs.sh"
+          cmp "$root/lib/mv1000-rootfs.sh" "$GITHUB_WORKSPACE/files/lib/mv1000-rootfs.sh"
+          test -x "$root/usr/libexec/mv1000-grow-rootfs"
+          test -x "$root/etc/uci-defaults/99-grow-rootfs"
+          test -x "$root/etc/init.d/mv1000-rootfs-reboot"
+          test -L "$root/etc/rc.d/S99mv1000-rootfs-reboot"
+          test ! -e "$root/etc/uci-defaults/99-data-partition"
+          for tool in resize2fs sfdisk partx blkid; do
+            test -x "$root/usr/sbin/$tool" || {
+              echo "::error::missing root expansion tool: $tool"
+              exit 1
+            }
+          done
           for package in kmod-tun kmod-inet-diag kmod-nft-nat kmod-nft-fib \
               kmod-nft-tproxy kmod-nf-tproxy kmod-nft-socket kmod-nf-socket; do
             test -s "$root/lib/apk/packages/${package}.list" || {
@@ -333,6 +370,11 @@ jobs:
             }
           done
           ls -lh bin/targets/mvebu/cortexa53/
+
+      - name: Verify growth of the actual firmware ext4 image
+        run: |
+          sudo python3 tests/rootfs_growth.py --image \
+            openwrt/bin/targets/mvebu/cortexa53/*-${PROFILE}-ext4-sdcard.img.gz
 
       - name: Collect image and matching kernel packages
         run: |

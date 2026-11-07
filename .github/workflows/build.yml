@@ -15,7 +15,7 @@ on:
           - none
         default: singbox
       rootfs_mb:
-        description: "Root filesystem size in MB (256 / 512 / 1024)"
+        description: "Initial root filesystem MiB (256 recommended; auto-grows on first boot)"
         type: string
         default: "256"
 
@@ -82,7 +82,14 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y zstd build-essential libncurses-dev zlib1g-dev \
-            libssl-dev rsync unzip file
+            libssl-dev rsync unzip file fdisk e2fsprogs python3 shellcheck bsdextrautils
+
+      - name: Test root filesystem growth on disposable disks
+        run: |
+          shellcheck -s sh files/lib/mv1000-rootfs.sh files/usr/libexec/mv1000-grow-rootfs \
+            files/etc/uci-defaults/99-grow-rootfs files/etc/init.d/mv1000-rootfs-reboot
+          shellcheck -s sh scripts/prepare-rootfs-ext4.sh
+          sudo python3 tests/rootfs_growth.py
 
       - name: Restore Image Builder tarball
         uses: actions/cache@v4
@@ -117,6 +124,7 @@ jobs:
         run: |
           set -euo pipefail
           cd "openwrt-imagebuilder-${OWRT_VERSION}-${TARGET_NAME}.Linux-x86_64"
+          python3 "$GITHUB_WORKSPACE/scripts/patch-image-build.py" .
           echo "IB_DIR=$PWD" >> "$GITHUB_ENV"
           # Third-party apk packages (Vantage, sing-box-tiny) are not signed
           # with a key known to the build, so signature verification has to be off.
@@ -125,6 +133,11 @@ jobs:
           sed -i 's/^CONFIG_SIGNATURE_CHECK=.*/# CONFIG_SIGNATURE_CHECK is not set/' .config
           mkdir -p packages
           chmod +x "$GITHUB_WORKSPACE"/files/etc/uci-defaults/*
+          chmod +x "$GITHUB_WORKSPACE/files/usr/libexec/mv1000-grow-rootfs" \
+            "$GITHUB_WORKSPACE/files/etc/init.d/mv1000-rootfs-reboot"
+          mkdir -p "$GITHUB_WORKSPACE/files/etc/rc.d"
+          ln -sf ../init.d/mv1000-rootfs-reboot \
+            "$GITHUB_WORKSPACE/files/etc/rc.d/S99mv1000-rootfs-reboot"
 
       - name: Download sing-box apk
         if: env.PLUGIN == 'singbox'
@@ -142,7 +155,7 @@ jobs:
       - name: Fetch theme and plugin packages
         run: |
           set -euo pipefail
-          pkgs="luci luci-i18n-base-zh-cn luci-i18n-firewall-zh-cn luci-app-package-manager luci-i18n-package-manager-zh-cn curl ca-bundle parted block-mount e2fsprogs wget-ssl"
+          pkgs="luci luci-i18n-base-zh-cn luci-i18n-firewall-zh-cn luci-app-package-manager luci-i18n-package-manager-zh-cn curl ca-bundle parted block-mount e2fsprogs resize2fs sfdisk partx-utils blkid wget-ssl"
 
           for pkg in luci-theme-vantage luci-app-vantage \
               luci-i18n-vantage-zh-cn luci-i18n-vantage-theme-zh-cn; do
@@ -190,13 +203,20 @@ jobs:
         run: |
           set -euo pipefail
           cd "$IB_DIR"
+          # OpenWrt uses CONFIG_TARGET_ROOTFS_PARTSIZE for both filesystem and
+          # partition geometry; ROOTFS_PARTSIZE is an internal byte count.
+          sed -i "s/^CONFIG_TARGET_ROOTFS_PARTSIZE=.*/CONFIG_TARGET_ROOTFS_PARTSIZE=$ROOTFS_MB/" .config
           make image \
             PROFILE="$PROFILE" \
             PACKAGES="$PKGS" \
             FILES="$GITHUB_WORKSPACE/files" \
-            ROOTFS_PARTSIZE="$ROOTFS_MB" \
             EXTRA_IMAGE_NAME="mv1000-${PLUGIN}"
           ls -lh bin/targets/"$TARGET_PATH"/
+
+      - name: Verify growth of the actual firmware ext4 image
+        run: |
+          sudo python3 tests/rootfs_growth.py --image \
+            "$IB_DIR"/bin/targets/mvebu/cortexa53/*-${PROFILE}-ext4-sdcard.img.gz
 
       - name: Upload image
         uses: actions/upload-artifact@v7

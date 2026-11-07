@@ -1,0 +1,23 @@
+#!/bin/sh
+# Only operate on the actual MV1000 eMMC root, never an inferred fallback disk.
+export LC_ALL=C
+[ "$(cat /tmp/sysinfo/board_name 2>/dev/null)" = 'glinet,gl-mv1000' ] || exit 0
+[ "$(awk '$2 == "/" {print $3}' /proc/mounts)" = ext4 ] || exit 0
+
+major_minor=$(awk '$5 == "/" {print $3; exit}' /proc/self/mountinfo)
+root_sys=$(readlink -f "/sys/dev/block/$major_minor") || exit 1
+root_name=${root_sys##*/}
+case "$root_name" in
+	mmcblk[0-9]p2) ;;
+	*) logger -t mv1000-grow-rootfs 'Root is not an eMMC p2; skipping'; exit 0 ;;
+esac
+disk_name=${root_name%p2}
+[ "$(cat "/sys/class/block/$disk_name/removable")" = 0 ] || exit 0
+[ "$(cat "/sys/class/block/$root_name/partition")" = 2 ] || exit 1
+
+# shellcheck source=files/lib/mv1000-rootfs.sh
+. /lib/mv1000-rootfs.sh
+grow_rootfs "/dev/$disk_name" "/dev/$root_name" /etc/mv1000-rootfs
+rc=$?
+logger -t mv1000-grow-rootfs "Result=$rc; details in /etc/mv1000-rootfs/log"
+exit "$rc"

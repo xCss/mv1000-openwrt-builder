@@ -1,0 +1,11 @@
+#!/bin/sh
+# uci-defaults removes this file only after completion (or a preserved layout).
+/etc/init.d/mv1000-rootfs-reboot enable || exit 1
+/usr/libexec/mv1000-grow-rootfs
+rc=$?
+if [ "$rc" = 10 ]; then
+	# Let all other first-boot configuration commit before the late reboot hook.
+	touch /tmp/mv1000-rootfs-reboot
+	exit 1
+fi
+exit "$rc"

@@ -6,7 +6,7 @@
 
 ## 构建与下载
 
-在 [GitHub Actions](https://github.com/xCss/mv1000-openwrt-builder/actions/workflows/honk.yml) 选择 **Build MV1000 universal firmware (honk default)** → **Run workflow**。`rootfs_mb` 默认 `256` MiB，建议保持默认。
+在 [GitHub Actions](https://github.com/xCss/mv1000-openwrt-builder/actions/workflows/honk.yml) 选择 **Build MV1000 universal firmware (honk default)** → **Run workflow**。`rootfs_mb` 是镜像内的初始容量，默认 `256` MiB；刷入后自动将 ext4 根分区扩大到 eMMC 剩余空间，建议保持默认。
 
 | Workflow | 用途 | 触发方式 |
 | --- | --- | --- |
@@ -26,7 +26,7 @@
 | MV1000 | `192.168.1.2` | 旁路由，关闭 DHCP |
 | 终端 | 主路由分配 | 启用代理时，网关和 DNS 指向 `.2` |
 
-主路由的 LAN 口接 MV1000 的 LAN 口，MV1000 的 WAN 口不接。首次启动会关闭 MV1000 的 DHCP，并将 eMMC 剩余空间挂载到 `/mnt/data`。镜像的网络默认值见 [首次启动脚本](files/etc/uci-defaults/99-bypass-router)，刷机后需按实际网络调整网关和 DNS。
+主路由的 LAN 口接 MV1000 的 LAN 口，MV1000 的 WAN 口不接。首次启动会关闭 MV1000 的 DHCP，并将 eMMC 剩余空间用于根目录 `/`，不再新建 `/mnt/data` 分区。镜像的网络默认值见 [首次启动脚本](files/etc/uci-defaults/99-bypass-router)，刷机后需按实际网络调整网关和 DNS。
 
 ## 刷机
 
@@ -34,18 +34,22 @@
 
 1. 下载 `*glinet_gl-mv1000-ext4-sdcard.img.gz`，按 `sha256sums` 校验后解压为 **`.img`**。部分解压工具会提示 gzip 尾部附有 OpenWrt 元数据。
 2. 断开 MV1000 与主路由的连接，电脑有线网卡设为 `192.168.1.3/24`，直连 MV1000 的 LAN 口，避免恢复地址与主路由冲突。
-3. 按住 Reset 上电进入 [U-Boot 恢复模式](https://docs.gl-inet.cn/router/3/features/uboot/)，访问 `http://192.168.1.1`，上传 `.img` 并等待重启。
-4. 重启后访问 `http://192.168.1.2`；SSH 默认端口 `22`，首次登录设置密码或密钥。
+3. 按住 Reset 上电进入 [U-Boot 恢复模式](https://docs.gl-inet.cn/router/3/features/uboot/)，访问 `http://192.168.1.1`，上传 `.img` 并等待重启。首次切换到大根分区请用此完整镜像刷入方式；旧 `/mnt/data` 的分区布局会被替换，需要保留的文件须事先复制到电脑。
+4. 首次启动会自动扩大 p2 和 ext4；若内核无法在线更新分区容量，会额外自动重启一次。待启动稳定后访问 `http://192.168.1.2`；SSH 默认端口 `22`，首次登录设置密码或密钥。
 5. 在 LuCI 的 **网络 → 接口 → LAN** 中，将 IPv4 网关和自定义 DNS 改为主路由实际地址（本例 `192.168.1.1`），保存应用后接回主路由，电脑改回 DHCP。若网段不同，LAN 地址也需一并调整。
 
-检查设备、数据分区和通用固件标识：
+检查设备、根分区扩容结果和通用固件标识：
 
 ```sh
 ubus call system board
-df -h / /mnt/data
+df -h /
+cat /etc/mv1000-rootfs/status
+cat /etc/mv1000-rootfs/log
 cat /etc/mv1000-build-info
 ls -l /sys/kernel/btf/vmlinux /dev/net/tun
 ```
+
+正常结果为 `status=complete`（文件内容为 `complete`）、`/` 约 7 GiB。若显示 `skipped-layout`，说明仍存在 p3 或其他非预期分区，脚本保留现有数据并跳过扩容；请核对是否按完整镜像方式刷入。技术实现、测试及后续升级说明见 [根分区自动扩容](docs/rootfs-expansion.md)。
 
 ## 启用 honk
 
