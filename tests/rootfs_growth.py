@@ -100,6 +100,8 @@ class Disk:
 
     def attach(self):
         self.loop = run("losetup", "--find", "--show", "--partscan", str(self.path))
+        if shutil.which("udevadm"):
+            run("udevadm", "settle", "--timeout=30")
         # Minimal privileged containers have no udev to create partition nodes.
         for n in range(1, 5):
             dev = Path(self.loop + f"p{n}")
@@ -165,6 +167,8 @@ class Disk:
             finally:
                 run("losetup", "-d", self.loop)
                 self.loop = None
+                if shutil.which("udevadm"):
+                    run("udevadm", "settle", "--timeout=30")
 
 
 def exercise(kind, image=None, prepare_legacy=False):
