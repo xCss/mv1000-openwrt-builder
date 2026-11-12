@@ -1,3 +1,15 @@
+/openwrt/
+/openwrt-imagebuilder-*/
+/openwrt-sdk-*/
+/.cache/
+/artifacts/
 *.tar.zst
-sha256sums
-files/etc/openclash/core/clash_meta
+*.img
+*.img.gz
+*.apk
+/sha256sums
+/sha256sums.sdk
+/*.log
+__pycache__/
+*.py[cod]
+/files/etc/openclash/core/clash_meta

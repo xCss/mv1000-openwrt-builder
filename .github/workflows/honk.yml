@@ -97,9 +97,10 @@ jobs:
           ./scripts/feeds install -p luci \
             luci luci-i18n-base-zh-cn luci-i18n-firewall-zh-cn \
             luci-app-package-manager luci-i18n-package-manager-zh-cn \
+            luci-app-sqm luci-i18n-sqm-zh-cn \
             ucode-mod-rtnl rpcd-mod-iwinfo rpcd-mod-ucode
           ./scripts/feeds install -p packages \
-            curl parted wget-ssl v2ray-geoip v2ray-geosite
+            curl parted wget-ssl v2ray-geoip v2ray-geosite sqm-scripts
           ./scripts/feeds install -p vantage \
             luci-theme-vantage luci-app-vantage \
             luci-i18n-vantage-zh-cn luci-i18n-vantage-theme-zh-cn
@@ -114,6 +115,8 @@ jobs:
           mkdir -p package/honk-bin
           cp -a "$GITHUB_WORKSPACE/honk/honk-bin/." package/honk-bin/
           cp -a "$GITHUB_WORKSPACE/files/." package/base-files/files/
+          mkdir -p files
+          cp -a "$GITHUB_WORKSPACE/honk/files/." files/
           cat > package/base-files/files/etc/mv1000-build-info <<EOF
           FIRMWARE_FLAVOR=honk-singbox
           OPENWRT_VERSION=${OWRT_VERSION}
@@ -160,12 +163,21 @@ jobs:
           CONFIG_KERNEL_FTRACE=y
           CONFIG_KERNEL_FUNCTION_TRACER=y
           CONFIG_KERNEL_DYNAMIC_FTRACE=y
+          CONFIG_KERNEL_BPF_EVENTS=y
+          CONFIG_KERNEL_KPROBES=y
+          CONFIG_KERNEL_KPROBE_EVENTS=y
+          CONFIG_KERNEL_PERF_EVENTS=y
           CONFIG_PACKAGE_luci=y
           CONFIG_LUCI_LANG_zh_Hans=y
           CONFIG_PACKAGE_luci-i18n-base-zh-cn=y
           CONFIG_PACKAGE_luci-i18n-firewall-zh-cn=y
           CONFIG_PACKAGE_luci-app-package-manager=y
           CONFIG_PACKAGE_luci-i18n-package-manager-zh-cn=y
+          CONFIG_PACKAGE_luci-app-sqm=y
+          CONFIG_PACKAGE_luci-i18n-sqm-zh-cn=y
+          CONFIG_PACKAGE_sqm-scripts=y
+          CONFIG_PACKAGE_ip-full=y
+          CONFIG_PACKAGE_tc-full=y
           CONFIG_PACKAGE_luci-theme-vantage=y
           CONFIG_PACKAGE_luci-app-vantage=y
           CONFIG_PACKAGE_luci-i18n-vantage-zh-cn=y
@@ -187,6 +199,10 @@ jobs:
           CONFIG_PACKAGE_kmod-veth=y
           CONFIG_PACKAGE_kmod-sched-core=y
           CONFIG_PACKAGE_kmod-sched-bpf=y
+          CONFIG_PACKAGE_kmod-sched=y
+          CONFIG_PACKAGE_kmod-sched-cake=y
+          CONFIG_PACKAGE_kmod-ifb=y
+          CONFIG_PACKAGE_kmod-tcp-bbr=y
           CONFIG_PACKAGE_kmod-nft-core=y
           CONFIG_PACKAGE_kmod-nft-queue=y
           CONFIG_PACKAGE_kmod-nfnetlink-queue=y
@@ -208,12 +224,16 @@ jobs:
               CONFIG_PACKAGE_luci-i18n-base-zh-cn \
               CONFIG_PACKAGE_luci-i18n-firewall-zh-cn \
               CONFIG_PACKAGE_luci-i18n-package-manager-zh-cn \
+              CONFIG_PACKAGE_luci-app-sqm CONFIG_PACKAGE_luci-i18n-sqm-zh-cn \
+              CONFIG_PACKAGE_sqm-scripts CONFIG_PACKAGE_ip-full CONFIG_PACKAGE_tc-full \
               CONFIG_PACKAGE_luci-i18n-vantage-zh-cn \
               CONFIG_PACKAGE_luci-i18n-vantage-theme-zh-cn \
               CONFIG_PACKAGE_honk-bin CONFIG_PACKAGE_luci-theme-vantage \
               CONFIG_PACKAGE_resize2fs CONFIG_PACKAGE_sfdisk \
               CONFIG_PACKAGE_partx-utils CONFIG_PACKAGE_blkid \
               CONFIG_PACKAGE_luci-app-vantage CONFIG_PACKAGE_kmod-sched-bpf \
+              CONFIG_PACKAGE_kmod-sched CONFIG_PACKAGE_kmod-sched-cake \
+              CONFIG_PACKAGE_kmod-ifb CONFIG_PACKAGE_kmod-tcp-bbr \
               CONFIG_PACKAGE_kmod-tun CONFIG_PACKAGE_kmod-inet-diag \
               CONFIG_PACKAGE_kmod-nft-nat CONFIG_PACKAGE_kmod-nft-fib \
               CONFIG_PACKAGE_kmod-nft-tproxy CONFIG_PACKAGE_kmod-nf-tproxy \
@@ -222,7 +242,9 @@ jobs:
               CONFIG_KERNEL_NAMESPACES CONFIG_KERNEL_NET_NS \
               CONFIG_KERNEL_DEBUG_INFO CONFIG_KERNEL_DEBUG_INFO_BTF \
               CONFIG_KERNEL_FTRACE CONFIG_KERNEL_FUNCTION_TRACER \
-              CONFIG_KERNEL_DYNAMIC_FTRACE CONFIG_DWARVES; do
+              CONFIG_KERNEL_DYNAMIC_FTRACE CONFIG_KERNEL_BPF_EVENTS \
+              CONFIG_KERNEL_KPROBES CONFIG_KERNEL_KPROBE_EVENTS \
+              CONFIG_KERNEL_PERF_EVENTS CONFIG_DWARVES; do
             grep -qx "${symbol}=y" .config || {
               echo "::error::${symbol} was not selected"
               exit 1
@@ -299,7 +321,9 @@ jobs:
               CONFIG_CGROUPS CONFIG_CGROUP_BPF CONFIG_NET_SCHED CONFIG_NET_CLS_ACT \
               CONFIG_NET_XGRESS CONFIG_NAMESPACES CONFIG_NET_NS \
               CONFIG_DEBUG_INFO CONFIG_DEBUG_INFO_BTF CONFIG_FTRACE \
-              CONFIG_FUNCTION_TRACER CONFIG_DYNAMIC_FTRACE; do
+              CONFIG_FUNCTION_TRACER CONFIG_DYNAMIC_FTRACE \
+              CONFIG_BPF_EVENTS CONFIG_KPROBES CONFIG_KPROBE_EVENTS \
+              CONFIG_PERF_EVENTS CONFIG_NETKIT CONFIG_TCP_CONG_CUBIC; do
             grep -qx "${symbol}=y" "$kconf" || {
               echo "::error::${symbol} is not =y in the built kernel"
               exit 1
@@ -311,7 +335,10 @@ jobs:
               CONFIG_INET_UDP_DIAG CONFIG_INET_RAW_DIAG \
               CONFIG_NFT_NAT CONFIG_NFT_FIB_INET \
               CONFIG_NFT_TPROXY CONFIG_NF_TPROXY_IPV4 CONFIG_NF_TPROXY_IPV6 \
-              CONFIG_NFT_SOCKET CONFIG_NF_SOCKET_IPV4 CONFIG_NF_SOCKET_IPV6; do
+              CONFIG_NFT_SOCKET CONFIG_NF_SOCKET_IPV4 CONFIG_NF_SOCKET_IPV6 \
+              CONFIG_TCP_CONG_BBR CONFIG_NET_SCH_FQ CONFIG_NET_SCH_FQ_CODEL \
+              CONFIG_NET_SCH_CAKE CONFIG_IFB CONFIG_NET_SCH_INGRESS \
+              CONFIG_NET_ACT_MIRRED CONFIG_NET_CLS_U32; do
             grep -Eq "^${symbol}=[ym]$" "$kconf" || {
               echo "::error::${symbol} is neither =y nor =m in the built kernel"
               exit 1
@@ -337,14 +364,17 @@ jobs:
             }
           done
           for package in kmod-tun kmod-inet-diag kmod-nft-nat kmod-nft-fib \
-              kmod-nft-tproxy kmod-nf-tproxy kmod-nft-socket kmod-nf-socket; do
+              kmod-nft-tproxy kmod-nf-tproxy kmod-nft-socket kmod-nf-socket \
+              kmod-tcp-bbr kmod-sched kmod-sched-cake kmod-ifb \
+              ip-full tc-full sqm-scripts luci-app-sqm luci-i18n-sqm-zh-cn; do
             test -s "$root/lib/apk/packages/${package}.list" || {
               echo "::error::${package} is not installed in the image"
               exit 1
             }
           done
           for module in tun inet_diag tcp_diag udp_diag raw_diag nft_tproxy \
-              nf_tproxy_ipv4 nf_tproxy_ipv6 nft_socket nf_socket_ipv4 nf_socket_ipv6; do
+              nf_tproxy_ipv4 nf_tproxy_ipv6 nft_socket nf_socket_ipv4 nf_socket_ipv6 \
+              tcp_bbr sch_fq sch_cake ifb sch_ingress act_mirred cls_u32; do
             test -n "$(find "$root/lib/modules" -type f -name "${module}.ko*" -print -quit)" || {
               echo "::error::missing installed kernel module: ${module}"
               exit 1
@@ -352,6 +382,29 @@ jobs:
           done
           test -s "$root/etc/modules.d/30-tun" || {
             echo "::error::TUN module has no boot autoload entry"
+            exit 1
+          }
+          for tool in ip-full tc-full; do
+            test -x "$root/usr/libexec/$tool"
+          done
+          test "$(readlink "$root/sbin/ip")" = '/usr/libexec/ip-full'
+          test "$(readlink "$root/sbin/tc")" = '/usr/libexec/tc-full'
+          test -x "$root/etc/init.d/sqm"
+          test -x "$root/usr/lib/sqm/run.sh"
+          test -s "$root/usr/lib/sqm/piece_of_cake.qos"
+          cmp "$root/etc/config/sqm" "$GITHUB_WORKSPACE/honk/files/etc/config/sqm"
+          cmp "$root/etc/sysctl.d/90-mv1000-tcp.conf" \
+            "$GITHUB_WORKSPACE/honk/files/etc/sysctl.d/90-mv1000-tcp.conf"
+          tcp_cc="$(awk -F= '
+            /^[[:space:]]*net[.]ipv4[.]tcp_congestion_control[[:space:]]*=/ {
+              value = $2
+              sub(/[[:space:]]*[#;].*$/, "", value)
+              gsub(/[[:space:]]/, "", value)
+            }
+            END { print value }
+          ' "$root"/etc/sysctl.d/*.conf "$root/etc/sysctl.conf")"
+          test "$tcp_cc" = cubic || {
+            echo "::error::the image must keep cubic as the default TCP congestion control"
             exit 1
           }
           vmlinux="$(dirname "$kconf")/vmlinux"
@@ -362,7 +415,7 @@ jobs:
           }
           test -x "$(find build_dir -type f -name honk-core -print -quit)"
           test -d "$(find build_dir -type d -path '*/root-*/www/luci-static/vantage' -print -quit)"
-          for catalog in base firewall package-manager vantage vantage-theme; do
+          for catalog in base firewall package-manager sqm vantage vantage-theme; do
             test -s "$(find build_dir -type f \
               -path "*/root-mvebu/usr/lib/lua/luci/i18n/${catalog}.zh-cn.lmo" -print -quit)" || {
               echo "::error::missing Simplified Chinese translation: ${catalog}"
@@ -389,7 +442,8 @@ jobs:
           test "${#packages[@]}" -gt 0
           cp "${packages[@]}" "$out/"
           for package in kernel kmod-tun kmod-inet-diag kmod-nft-nat kmod-nft-fib \
-              kmod-nft-tproxy kmod-nf-tproxy kmod-nft-socket kmod-nf-socket; do
+              kmod-nft-tproxy kmod-nf-tproxy kmod-nft-socket kmod-nf-socket \
+              kmod-tcp-bbr kmod-sched kmod-sched-core kmod-sched-cake kmod-ifb; do
             matches=("$out/${package}-"[0-9]*.apk)
             test "${#matches[@]}" -eq 1 && test -s "${matches[0]}" || {
               echo "::error::missing or ambiguous kernel package: ${package}"

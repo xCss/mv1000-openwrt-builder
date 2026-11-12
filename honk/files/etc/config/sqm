@@ -1,0 +1,8 @@
+config queue 'bypass'
+	option enabled '0'
+	option interface ''
+	option download '0'
+	option upload '0'
+	option qdisc 'cake'
+	option script 'piece_of_cake.qos'
+	option linklayer 'none'

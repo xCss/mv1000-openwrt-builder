@@ -4,6 +4,8 @@
 
 基于 OpenWrt **25.12.6**，预装 honk **v0.1.0-beta.5**、LuCI、Vantage 和简体中文。自编内核包含 BPF/BTF、TUN、inet-diag、nftables TPROXY 等两套程序所需的能力。
 
+默认构建另包含 BPF receive tracing、NETKIT、BBR/fq、CAKE/IFB、SQM 与完整 `ip`/`tc` 工具。BBR 可选，TCP 默认仍为 cubic；SQM 队列默认关闭，未绑定接口、未设置带宽，不自动整形单臂流量。启用范围、构建检查与刷机后验收见 [内核与流量控制能力](docs/network-capabilities.md)。
+
 ## 构建与下载
 
 在 [GitHub Actions](https://github.com/xCss/mv1000-openwrt-builder/actions/workflows/honk.yml) 选择 **Build MV1000 universal firmware (honk default)** → **Run workflow**。`rootfs_mb` 是镜像内的初始容量，默认 `256` MiB；刷入后自动将 ext4 根分区扩大到 eMMC 剩余空间，建议保持默认。
@@ -85,6 +87,7 @@ sysctl -p /etc/sysctl.d/60-honk-single-arm.conf
 
 ## 更多操作
 
+- [内核与流量控制能力、BBR/SQM 验收](docs/network-capabilities.md)
 - [安装与切换 honk / sing-box](docs/proxy-switching.md)
 - [备用固件与 sing-box 包构建](docs/alternative-firmware.md)
 - [OpenWrt 设备说明](https://openwrt.org/toh/gl.inet/gl-mv1000) · [GL 原厂固件](https://dl.gl-inet.com/router/mv1000/)
