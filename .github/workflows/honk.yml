@@ -62,6 +62,8 @@ jobs:
           shellcheck -s sh files/lib/mv1000-rootfs.sh files/usr/libexec/mv1000-grow-rootfs \
             files/etc/uci-defaults/99-grow-rootfs files/etc/init.d/mv1000-rootfs-reboot
           shellcheck -s sh scripts/prepare-rootfs-ext4.sh
+          shellcheck -s sh files/etc/uci-defaults/99-packet-steering
+          python3 tests/packet_steering.py
           sudo python3 tests/rootfs_growth.py
 
       - name: Clone OpenWrt
@@ -354,6 +356,9 @@ jobs:
           cmp "$root/lib/mv1000-rootfs.sh" "$GITHUB_WORKSPACE/files/lib/mv1000-rootfs.sh"
           test -x "$root/usr/libexec/mv1000-grow-rootfs"
           test -x "$root/etc/uci-defaults/99-grow-rootfs"
+          test -x "$root/etc/uci-defaults/99-packet-steering"
+          cmp "$root/etc/uci-defaults/99-packet-steering" "$GITHUB_WORKSPACE/files/etc/uci-defaults/99-packet-steering"
+          test -x "$root/etc/init.d/packet_steering"
           test -x "$root/etc/init.d/mv1000-rootfs-reboot"
           test -L "$root/etc/rc.d/S99mv1000-rootfs-reboot"
           test ! -e "$root/etc/uci-defaults/99-data-partition"

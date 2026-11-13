@@ -13,10 +13,31 @@
 | CAKE、IFB | `kmod-sched-cake`、`kmod-ifb` 及 SQM 依赖 | 提供整形能力，不自动配置流量重定向 |
 | SQM | `sqm-scripts`、`luci-app-sqm`、简体中文界面 | `bypass` 队列关闭，接口为空，上传/下载均为 0 |
 | 诊断工具 | `ip-full`、`tc-full` | 完整工具作为 `/sbin/ip` 和 `/sbin/tc` 的实现 |
+| 多核收包分流 | OpenWrt 自带 `packet_steering` 服务与首次启动检测脚本 | 多核且没有已有选项时设置 `network.@globals[0].packet_steering=2`，单核不启用 |
 
 OpenWrt 的 `kmod-tcp-bbr` 包会安装 `/etc/sysctl.d/12-tcp-bbr.conf`，自动设置 BBR。本固件通过后加载的 `/etc/sysctl.d/90-mv1000-tcp.conf` 保留 cubic，避免安装模块就改变默认 TCP 行为。SQM 的服务入口可以存在，但关闭的队列不会执行整形；`/etc/init.d/sqm enabled` 只表示服务自启状态，不表示队列已经启用。
 
 上述是新镜像的默认值。保留配置升级或恢复备份后，原有 `/etc/config/sqm`、`/etc/sysctl.conf` 等用户配置可能继续生效，应重新检查实际状态。
+
+## 自动启用多核收包分流
+
+`files/etc/uci-defaults/99-packet-steering` 随镜像打包，在设备首次启动时读取 `/proc/stat` 的在线 CPU 数量。检测的是路由器 CPU，不能使用 GitHub Actions 构建主机的 `nproc` 结果。多核且没有显式 packet steering 配置时，脚本创建所需的 globals 段、设置 `packet_steering=2` 并启用、重载系统自带服务。单核或缺少服务时跳过；已有值（包括 `0`）保持不变。
+
+在本次 MV1000/OpenWrt 版本上，标准服务会把 eth0 的接收队列 RPS 位掩码设置为 `3`，允许 CPU0 和 CPU1 按流分配；其他平台由其标准服务或平台脚本决定具体分配。无需写死 CPU 数量、网卡 IRQ 编号或 honk 进程亲和性。后续网络、接口及防火墙事件由系统服务重新应用配置。
+
+2026-11-13 的 MV1000 有线实测中，国内 8 并发约 55 秒下载由 165–168 Mbps 提升到 272–301 Mbps，上传约 53.55 Mbps。高负载下仍有丢弃计数及部分 ICMP 超时；这些结果不是千兆吞吐保证。将全部接收处理移到单个另一核心在 8/16 并发下出现明显软件队列丢包，因此采用标准多核选项。
+
+检查实际配置与分配：
+
+```sh
+uci get 'network.@globals[0].packet_steering'
+/etc/init.d/packet_steering enabled
+for queue in /sys/class/net/eth0/queues/rx-*; do
+    cat "$queue/rps_cpus"
+done
+```
+
+首次启动成功后脚本由 OpenWrt 删除，之后用户修改不会被强制覆盖。保留配置升级时若已有选项则保留；若尚未配置且为多核，则使用新默认值。手动恢复旧备份可能覆盖该选项，应重新检查。此检测脚本也被备用 ImageBuilder 工作流打包。
 
 ## honk 的“未知”与内核降级
 

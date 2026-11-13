@@ -6,6 +6,8 @@
 
 默认构建另包含 BPF receive tracing、NETKIT、BBR/fq、CAKE/IFB、SQM 与完整 `ip`/`tc` 工具。BBR 可选，TCP 默认仍为 cubic；SQM 队列默认关闭，未绑定接口、未设置带宽，不自动整形单臂流量。启用范围、构建检查与刷机后验收见 [内核与流量控制能力](docs/network-capabilities.md)。
 
+首次启动会检测路由器在线 CPU 核数，多核且未配置 packet steering 时自动启用双核/多核收包分流（`packet_steering=2`）。保留配置升级时尊重已有选项，包括明确关闭的配置。
+
 ## 构建与下载
 
 在 [GitHub Actions](https://github.com/xCss/mv1000-openwrt-builder/actions/workflows/honk.yml) 选择 **Build MV1000 universal firmware (honk default)** → **Run workflow**。`rootfs_mb` 是镜像内的初始容量，默认 `256` MiB；刷入后自动将 ext4 根分区扩大到 eMMC 剩余空间，建议保持默认。
